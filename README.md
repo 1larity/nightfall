@@ -29,6 +29,8 @@ In [B-em](https://github.com/stardot/b-em), pick your machine from the Model men
 *RUN NFBOOT
 ```
 
+In BeebEm, turn off Write Protect on Load on the File menu before loading the disc: a save to a write-protected disc stops the game with "Disc read only". In b2, fit the ROM images as ROMs rather than writeable banks, and leave only slot 6 writeable.
+
 Your players are saved on the disc, so keep it writable and hang on to your copy: the disc from a later release starts fresh.
 
 `SHA256SUMS` lists the checksum of each file.
@@ -41,7 +43,12 @@ In-game: **WASD** moves, **M** opens the world map, **Escape** pauses.
 
 ## Tested on
 
-B-em built from source (commit a76c365) as a Master 128, Master Turbo, Master + 6502 Tube and BBC B, and jsbeeb as a Master 128. Nothing has run on real hardware yet, so reports from real machines are very welcome.
+- B-em built from source (commit a76c365): Master 128, Master Turbo, Master + 6502 Tube, BBC B
+- BeebEm 4.19: Master 128, Master + 65C02 Tube, BBC B
+- b2 (20260322): Master 128, Master Turbo
+- jsbeeb: Master 128
+
+BeebEm and b2 are the Windows builds, tested under Wine. Nothing has run on real hardware yet, so reports from real machines are very welcome.
 
 ## Reporting a problem
 
