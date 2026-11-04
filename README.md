@@ -1,5 +1,7 @@
 # Nightfall
 
+![Nightfall cover art: a horned knight faces a moonlit castle as bats, Zombees and a wizard emerge from its gate](assets/nightfall-cover.jpg)
+
 Nightfall is an incremental survivor game for the BBC Micro series: patrol an endless scrolling world, cut down the horde and grind enough power to beat 3 shrine guardians. This repo holds the files to run the public beta and the [issue tracker](https://github.com/1larity/nightfall/issues). More about the game is on the [Nightfall page](https://evile.uk/redesign/projects/nightfall/).
 
 The game project made considerable use of AI coding agents, all graphics are by the author, and the music is Holst's 'The Planets'.
@@ -29,7 +31,7 @@ In [B-em](https://github.com/stardot/b-em), pick your machine from the Model men
 *RUN NFBOOT
 ```
 
-In BeebEm, turn off Write Protect on Load on the File menu before loading the disc: a save to a write-protected disc stops the game with "Disc read only". In b2, fit the ROM images as ROMs rather than writeable banks, and leave only slot 6 writeable.
+Nightfall saves to its disc, so if the disc is write protected it tells you when it starts and waits while you turn protection off. BeebEm protects discs as it loads them: turn off Write Protect on Load on the File menu before loading the disc. In b2, fit the ROM images as ROMs rather than writeable banks, and leave only slot 6 writeable.
 
 Your players are saved on the disc, so keep it writable and hang on to your copy: the disc from a later release starts fresh.
 
