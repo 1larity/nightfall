@@ -1,22 +1,26 @@
 # Nightfall source
 
-This is the 6502 assembly for Nightfall Beta 1, the build shown on the main menu as `BETA 1 AA0B928`. Assembled with the withheld files listed below, it produces the released `nightfall.ssd` and ROMs byte for byte.
+This is the 6502 assembly for Nightfall Beta 1, the build shown on the main menu as `BETA 1 AA0B928`. Building it produces the released `nightfall.ssd`, `NFASSETS.rom` and `EAUDIO.rom` byte for byte.
 
-## Assembling
+## Building
 
-You need [BeebAsm](https://github.com/stardot/beebasm). Run it from the top of this repository, as the paths are relative to there, and each program saves its binary into `build/`:
+You need [BeebAsm](https://github.com/stardot/beebasm) and Python 3. From the top of this repository, run:
 
-    beebasm -i src/reset.6502
-    beebasm -D CARD=0 -i src/ui.6502
-    beebasm -D SLOT=0 -D WEAPON_KIND=1 -i src/weapon-slot.6502
+    ./build.sh
 
-Three parts need files that are not in this repository:
+If BeebAsm is not on your path, set `BEEBASM` to where it is. On Windows, run the script from Git Bash or WSL. The results go in `build/`: use them with `EGFX.rom` and `EGFX2.rom` from the top of the repository, in the slots the main README lists.
 
-- `src/engine.6502` (NIGHT and NARENA) includes `build/eg-client.6502`, the small stub that calls EGFX. It defines `eg_call`: A is the function number, the parameters go in EGBUF from offset 8, and the call is OSWORD &C0.
-- `src/nf-companion.6502` (`NFASSETS.rom`) includes the built sprite packs, music scores and pause screen. The released `NFASSETS.rom` holds the result.
-- `src/disc.6502` builds the disc from every program, so it needs both of the above plus the loading picture, SCREEN.
+If you change the game, change the version line in `build/version.inc` too, so that your build can be told apart in bug reports. The script works out the label addresses and overlay sizes each time, so code can move freely, and the assembler stops if a program outgrows its window.
 
-`build/` holds the small generated inputs: the sprite and world frame tables, a few label addresses from the NIGHT and NARENA builds (which is how the overlays assemble without them), `splash.vdu` (the boot screen's mode and palette) and `WPTEST`. Comments that name `tools/` scripts or other `.md` files refer to build scripts and notes kept outside this repository.
+`build/` also holds what the source needs to assemble:
+
+- `eg-client.6502` is the small stub that calls EGFX: `eg_call` takes the function number in A and the parameters in EGBUF from offset 8, then calls OSWORD &C0.
+- `NFSPR16`, `NFSPR4` and `NFSPR8` are the built sprite packs, with `sprite-map.inc` and `world-frames.inc` as their tables.
+- `JUPITER` and `URANUS` are the built music scores.
+- `PAUSEFRAME`, `PAUSETITLE` and `SCREEN` are the pause screen artwork and the loading picture, as raw screen data.
+- `splash.vdu` and `splash.inc` set the boot screen's mode and palette, and `WPTEST` is the file NFBOOT uses to test that the disc can be written to.
+
+Comments that name `tools/` scripts or other `.md` files refer to the scripts and notes that made these files, which are kept outside this repository.
 
 ## Where everything goes
 
@@ -65,4 +69,4 @@ Drawing goes through `eg_call` to the EGFX ROMs, and the sprites live in `NFASSE
 
 ## Licence
 
-Copyright (c) 2026 Richard Beech. The source is CC BY-NC-SA 4.0 ([LICENSE](../LICENSE)), except `eaudio.6502`, which is MIT ([LICENSE-EAUDIO](../LICENSE-EAUDIO)).
+Copyright (c) 2026 Richard Beech. The source and the files in `build/` are CC BY-NC-SA 4.0 ([LICENSE](../LICENSE)), except `eaudio.6502`, which is MIT ([LICENSE-EAUDIO](../LICENSE-EAUDIO)), and `build/eg-client.6502`, which is part of EGFX and MIT ([LICENSE-EGFX](../LICENSE-EGFX)).

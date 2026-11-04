@@ -1,0 +1,18 @@
+# build.sh output
+build/*
+!build/JUPITER
+!build/NFSPR16
+!build/NFSPR4
+!build/NFSPR8
+!build/PAUSEFRAME
+!build/PAUSETITLE
+!build/SCREEN
+!build/URANUS
+!build/WPTEST
+!build/eg-client.6502
+!build/splash.inc
+!build/splash.vdu
+!build/sprite-map.inc
+!build/sword-bank.inc
+!build/version.inc
+!build/world-frames.inc

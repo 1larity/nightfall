@@ -10,6 +10,9 @@ commercial or not, may use it. See LICENSE-EAUDIO. It covers:
   tools/eaudio_score.py
   docs/eaudio.md
 
+The EGFX client stub build/eg-client.6502 is part of EGFX and MIT-licensed. See
+LICENSE-EGFX.
+
 Nightfall's own music scores, sound data and game code remain CC BY-NC-SA 4.0.
 Third-party material retains its own licence and attribution.
 

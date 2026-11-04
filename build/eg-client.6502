@@ -1,0 +1,24 @@
+; Shared processor-neutral assembler adapter. Caller defines EGBUF (64-byte
+; user-owned block) and prepares payload offsets 8..63. A=function number.
+; No bank/Tube hardware assumptions; standard MOS handles either processor.
+.eg_call
+    STA EGBUF+5
+    LDA #64: STA EGBUF: LDA #8: STA EGBUF+1
+    LDA #'E': STA EGBUF+2: LDA #'G': STA EGBUF+3
+    LDA #1: STA EGBUF+4
+    LDA #0: STA EGBUF+7
+    LDA #&C0: LDX #LO(EGBUF): LDY #HI(EGBUF): JSR &FFF1
+    LDA EGBUF+7: CMP #&A5: BNE eg_missing
+    LDA EGBUF+5: CMP #11: BCC eg_call_done
+    CMP #22: BEQ eg_call_done
+    CMP #23: BEQ eg_call_done
+    LDA EGBUF+6: BEQ eg_call_done
+    BRK
+    EQUB 202
+    EQUS "EGFX error",0
+.eg_missing
+    BRK
+    EQUB 203
+    EQUS "EGFX ROM required",0
+.eg_call_done
+    RTS

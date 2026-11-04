@@ -62,8 +62,8 @@ Beta 1 is the Barbarian and the first world. Next comes the gem store, where you
 
 ## Source
 
-The 6502 assembly for this build is in [src](src), with a guide to how it fits together and what it needs to assemble in [src/README.md](src/README.md).
+The 6502 assembly for this build is in [src](src), and `./build.sh` rebuilds the game with BeebAsm and Python 3. [src/README.md](src/README.md) explains the build and how the game fits together.
 
 ## Licences
 
-Copyright (c) 2026 Richard Beech. `nightfall.ssd` and `NFASSETS.rom` are CC BY-NC-SA 4.0 ([LICENSE](LICENSE)). `EGFX.rom` and `EGFX2.rom` are MIT ([LICENSE-EGFX](LICENSE-EGFX)). `EAUDIO.rom` and `src/eaudio.6502` are MIT ([LICENSE-EAUDIO](LICENSE-EAUDIO)). The rest of the source in `src` and `build` is CC BY-NC-SA 4.0.
+Copyright (c) 2026 Richard Beech. `nightfall.ssd` and `NFASSETS.rom` are CC BY-NC-SA 4.0 ([LICENSE](LICENSE)). `EGFX.rom` and `EGFX2.rom` are MIT ([LICENSE-EGFX](LICENSE-EGFX)). `EAUDIO.rom` and `src/eaudio.6502` are MIT ([LICENSE-EAUDIO](LICENSE-EAUDIO)). `build/eg-client.6502` is part of EGFX and MIT. The rest of `src` and `build` is CC BY-NC-SA 4.0.
