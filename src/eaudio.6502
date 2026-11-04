@@ -1,0 +1,425 @@
+; EAUDIO0.3: generic host sound service, standard MOS/Tube OSWORD transport.
+; Effects: note lists with per-ID priority and pitch variation, simultaneous
+; and queued notes, tone-channel allocation and volume scaling. Music: a
+; three-voice score read from a source ROM, kept queued from the vsync event
+; (so it plays on through disk loads and busy screens) and by TICK.
+; Requests are trusted (the game sends only its own commands and IDs): no
+; payload is validated, and only the bytes in use are copied.
+CPU 0
+ORG &8000
+EQUB 0,0,0
+JMP service
+EQUB &82, copyright-&8000, 6
+EQUS "EAUDIO",0,"0.3",0
+.copyright EQUB 0: EQUS "(C)2026 EAUDIO",0
+ORG &8080
+source=&74
+OSBYTE=&FFF4: OSWORD=&FFF1
+EABLOCK=&2900: EA_ACTIVE=&2940: EA_SFX=&2941
+EA_SYNC=&2942 ; SOUND sync count for the next music note (effects: always 0)
+EA_LEN=&2943: EA_AMP=&2944: EA_RR=&2945: EAPTR=&2946
+EA_VOL=&2948 ; 0 mute .. 3 full (the game sends it at boot, before any sound)
+EA_RNG=&2949 ; pitch-variation LFSR
+EA_PRIO=&294A ; +1..+3: priority of the effect on tone channel 1..3
+EA_UNTIL=&294D ; +1..+3: clock (centiseconds, low byte) when it ends ...
+EA_CLOCK=&2951 ; five-byte MOS clock
+EA_CH=&2956: EA_P=&2957: EA_NOTE=&2958: EA_ID=&2959 ; effect being played
+EA_V=&295A: EA_MBANK=&295B ; voice being fed, music source bank
+EA_UHI=&295B ; +1..+3: ... and that clock's second byte
+music=&2960 ; bytes copied from the source ROM by the bank gate
+sound_block=&2980
+EA_VLO=&2988: EA_VHI=&298B ; voice pointers, voices0..2
+envelope_block=&2990: track_gate=&29A0
+; The request block only uses bytes6..10: its tail holds the RAM event stub.
+EA_OLDEV=&290E: EA_EVENT=&2910
+EA_BUSY=&2966 ; nonzero while a request runs: the event leaves the workspace alone
+EA_DIV=&2967 ; vsyncs until the event next refills the music
+EA_SAVE=&2968 ; &EF..&F1 and source, saved around the event's MOS calls
+EA_SLO=&29E0: EA_SHI=&29E3 ; voice start pointers (loop)
+; &296D..&297F and &29E6..&29FF are unused here: the game keeps tables there
+; (nightfall's nfvars.inc).
+ASSERT EA_SAVE+5<=&296D AND track_gate+64<=EA_SLO AND EA_SHI+3<=&29E6
+MUSIC_ENVELOPE=4
+
+.service
+    CMP #8: BEQ service_word
+    RTS
+.service_word
+    PHA: TXA: PHA: TYA: PHA
+    LDA &EF: CMP #&C0: BNE service_pass
+    LDY #5
+.signature_check
+    LDA (&F0),Y: CMP signature,Y: BNE service_pass
+    DEY: BPL signature_check
+    LDA &F0: STA EAPTR: LDA &F1: STA EAPTR+1
+    LDA #1: STA EA_BUSY
+    ; MOS may enter service 8 with IRQs masked: a request's SOUND calls and
+    ; bank copies must not hold off other interrupts for milliseconds (the
+    ; vsync event leaves the workspace alone while EA_BUSY). Entry mask
+    ; restored before the reply.
+    PHP: CLI
+    LDY #10 ; command6, payload8..10
+.copy
+    LDA (&F0),Y: STA EABLOCK,Y: DEY: CPY #5: BNE copy
+    LDA source: PHA: LDA source+1: PHA
+    LDA EABLOCK+6: ASL A: TAX
+    LDA commands+1,X: PHA: LDA commands,X: PHA: RTS
+.service_pass
+    PLA: TAY: PLA: TAX: PLA: RTS
+.ok
+    LDA #0: STA EABLOCK+6
+    LDA #&A5: STA EABLOCK+7
+    PLA: STA source+1: PLA: STA source
+    PLP
+    LDA EAPTR: STA &F0: LDA EAPTR+1: STA &F1
+    LDY #9 ; status6, ack7, STATUS results8..9
+.reply_copy
+    LDA EABLOCK,Y: STA (&F0),Y: DEY: CPY #5: BNE reply_copy
+    PLA: TAY: PLA: TAX: PLA
+    LDA #0: STA EA_BUSY: RTS
+
+.cmd_init
+    LDA #0: STA EA_ACTIVE: STA EA_SFX
+    STA EA_PRIO+1: STA EA_PRIO+2: STA EA_PRIO+3
+    LDA #1: STA EA_RR
+    ; Every tone channel starts finished.
+    LDA #1: LDX #LO(EA_CLOCK): LDY #HI(EA_CLOCK): JSR OSWORD
+    LDA EA_CLOCK: STA EA_UNTIL+1: STA EA_UNTIL+2: STA EA_UNTIL+3
+    LDA EA_CLOCK+1: STA EA_UHI+1: STA EA_UHI+2: STA EA_UHI+3
+    LDA EA_RNG: BNE init_rng
+    LDA #&5A: STA EA_RNG
+.init_rng
+    JSR define_envelopes
+    JMP ok
+
+.cmd_volume
+    ; Payload: 0 mute .. 3 full. Envelope peaks are rescaled to match.
+    LDA EABLOCK+8: STA EA_VOL
+    JSR define_envelopes
+    JMP ok
+
+; MOS ENVELOPE (OSWORD8) per entry, attack/decay levels scaled by volume.
+.define_envelopes
+    LDX #0
+.envelope_next
+    LDY #0
+.envelope_copy
+    LDA envelopes,X: STA envelope_block,Y
+    INX: INY: CPY #14: BNE envelope_copy
+    TXA: PHA
+    LDA envelope_block+12: JSR scale_level: STA envelope_block+12
+    LDA envelope_block+13: JSR scale_level: STA envelope_block+13
+    LDA #8: LDX #LO(envelope_block): LDY #HI(envelope_block): JSR OSWORD
+    PLA: TAX: CPX #envelopes_end-envelopes: BNE envelope_next
+    RTS
+.scale_level ; A = level 0..126 -> about A*volume/3
+    JSR volume_now
+    CPY #3: BEQ level_done
+    CPY #0: BEQ level_zero
+    LSR A: LSR A: STA EA_LEN
+    LSR A: LSR A: CLC: ADC EA_LEN ; A*5/16, about a third
+    CPY #1: BEQ level_done
+    ASL A ; about two thirds
+.level_done
+    RTS
+.level_zero
+    LDA #0: RTS
+.volume_now ; Y = volume 0..3; keeps A
+    LDY EA_VOL
+    RTS
+
+.cmd_silence
+    ; Stop music and every channel, and forget effect priorities.
+    LDA #0: STA EA_ACTIVE: STA EA_SFX
+    STA EA_PRIO+1: STA EA_PRIO+2: STA EA_PRIO+3
+    LDX #0 ; noise and tone channels
+    BEQ quiet_channels
+.cmd_music_stop
+    LDA #0: STA EA_ACTIVE
+    LDX #1 ; tone channels only
+.quiet_channels ; a silent flushing note on channels X..3
+    STX EA_V
+    LDA #0: STA EA_AMP: LDY #1: JSR sound_flush
+    LDX EA_V: INX: CPX #4: BNE quiet_channels
+    JMP ok
+
+.cmd_music_start
+    ; Payload: bank, score page, score offset. The score header holds three
+    ; voice offsets from the header (16-bit); each voice is (pitch, duration)
+    ; pairs, pitch0 a rest, duration0 back to that voice's start.
+    JSR event_install
+    LDA EABLOCK+8: STA EA_MBANK
+    LDA EABLOCK+10: STA source: LDA EABLOCK+9: STA source+1
+    LDA #6: JSR fetch
+    LDX #2
+.music_voice_start
+    TXA: ASL A: TAY
+    LDA music,Y: CLC: ADC EABLOCK+10: STA EA_SLO,X: STA EA_VLO,X
+    LDA music+1,Y: ADC EABLOCK+9: STA EA_SHI,X: STA EA_VHI,X
+    DEX: BPL music_voice_start
+    LDA #1: STA EA_ACTIVE
+    JSR music_fill
+    JMP ok
+.cmd_tick
+    LDA #0: STA EA_SFX
+    JSR music_fill
+    JMP ok
+.cmd_status
+    LDA EA_ACTIVE: STA EABLOCK+8
+    LDA EA_SFX: STA EABLOCK+9
+    JMP ok
+
+; Keep each voice's MOS queue (tone channel voice+1) topped up.
+.music_fill
+    LDA EA_ACTIVE: BEQ music_idle
+    JSR volume_now: CPY #0: BNE music_audible
+.music_idle
+    RTS
+.music_audible
+    LDX #2
+.music_voice
+    STX EA_V
+.music_room
+    ; OSBYTE128 X=250-voice: free space in sound channel voice+1 (ADVAL-6..-8).
+    LDA #250: SEC: SBC EA_V: TAX
+    LDA #128: LDY #255: JSR OSBYTE
+    CPX #1: BCC music_next
+    LDX EA_V
+    LDA EA_VLO,X: STA source: LDA EA_VHI,X: STA source+1
+    LDA #2: JSR fetch
+    LDA music+1: BNE music_event
+    LDX EA_V ; end of this voice: back to its start
+    LDA EA_SLO,X: STA EA_VLO,X: LDA EA_SHI,X: STA EA_VHI,X
+    JMP music_room
+.music_event
+    LDY #MUSIC_ENVELOPE
+    LDA music: BNE music_sounding
+    LDY #0 ; a rest is a silent note
+.music_sounding
+    STY EA_AMP
+    ; Duration bit7 marks a bar's first note: it waits for the other two
+    ; voices (MOS sync), so a voice that ran dry during a disk load rejoins
+    ; at the next barline instead of staying out of step.
+    LDA music+1: AND #&80: BEQ music_unsynced
+    LDA #2
+.music_unsynced
+    STA EA_SYNC
+    LDA music+1: AND #&7F: TAY
+    LDX EA_V: INX
+    LDA music: JSR sound_queue_sync
+    LDX EA_V
+    LDA EA_VLO,X: CLC: ADC #2: STA EA_VLO,X
+    BCC music_room
+    INC EA_VHI,X: JMP music_room
+.music_next
+    LDX EA_V: DEX: BPL music_voice
+.music_done
+    RTS
+
+; The vsync event (50Hz, from IRQ): every fourth one tops up the music
+; queues unless a request is using the workspace. The MOS calls it makes
+; would overwrite &EF..&F1 (an interrupted OS call's) and `source` (EGFX's MP).
+.event_vsync
+    LDA EA_BUSY: BNE event_done
+    LDA EA_ACTIVE: BEQ event_done
+    DEC EA_DIV: BPL event_done
+    LDA #3: STA EA_DIV
+    TXA: PHA: TYA: PHA
+    LDX #4
+.event_save
+    LDA event_zp,X: TAY: LDA 0,Y: STA EA_SAVE,X
+    DEX: BPL event_save
+    JSR music_fill
+    LDX #4
+.event_restore
+    LDA event_zp,X: TAY: LDA EA_SAVE,X: STA 0,Y
+    DEX: BPL event_restore
+    PLA: TAY: PLA: TAX
+.event_done
+    RTS
+.event_zp EQUB &EF,&F0,&F1,source,source+1
+; Once only: copy the RAM stub (with our bank), chain it ahead of the old
+; EVNTV and enable the vsync event. A stub chained to itself would loop.
+.event_install
+    LDA &220: CMP #LO(EA_EVENT): BNE event_new
+    LDA &221: CMP #HI(EA_EVENT): BEQ event_installed
+.event_new
+    LDX #event_stub_end-event_stub-1
+.event_copy
+    LDA event_stub,X: STA EA_EVENT,X: DEX: BPL event_copy
+    LDA &F4: STA EA_EVENT+event_bank+1-event_stub
+    PHP: SEI
+    LDA &220: STA EA_OLDEV: LDA &221: STA EA_OLDEV+1
+    LDA #LO(EA_EVENT): STA &220: LDA #HI(EA_EVENT): STA &221
+    PLP
+    LDA #14: LDX #4: JMP OSBYTE
+.event_installed
+    RTS
+; EVNTV stub, run from RAM: page EAUDIO in for the vsync event, then chain.
+.event_stub
+    CMP #4: BNE event_chain
+    PHA: LDA &F4: PHA
+.event_bank
+    LDA #0: STA &F4: STA &FE30 ; patched: EAUDIO's bank
+    JSR event_vsync
+    PLA: STA &F4: STA &FE30
+    PLA
+.event_chain
+    JMP (EA_OLDEV)
+.event_stub_end
+ASSERT EA_EVENT+event_stub_end-event_stub<=&2940
+
+; Copy A bytes from (source) in bank EA_MBANK to `music` via the RAM gate.
+.fetch
+    STA EA_LEN
+    LDX #track_template_end-track_template-1
+.copy_gate
+    LDA track_template,X: STA track_gate,X: DEX: BPL copy_gate
+    JMP track_gate
+
+.cmd_sfx
+    LDA EABLOCK+8: STA EA_ID
+    JSR volume_now: CPY #0: BNE sfx_audible
+    JMP ok
+.sfx_audible
+    LDA #1: LDX #LO(EA_CLOCK): LDY #HI(EA_CLOCK): JSR OSWORD
+    LDX EA_ID
+    LDA sfx_flags,X: AND #3: STA EA_P
+    LDA sfx_start,X
+    ASL A: ASL A
+.sfx_note
+    ; Note: pitch, duration, channel (0 noise, 1 any tone channel; bit7 a
+    ; further note follows; bit6 queue on the previous note's channel),
+    ; amplitude (negative fixed, 0 silent, 1..4 envelope).
+    STA EA_NOTE: TAX
+    LDA notes+3,X: JSR scale_amp: STA EA_AMP
+    LDX EA_NOTE: LDA notes+2,X: AND #&40: BNE sfx_follow
+    LDA notes+2,X: AND #3: BNE sfx_tone
+    STA EA_CH ; noise channel0
+    BEQ sfx_play
+.sfx_tone
+    LDA notes+1,X: JSR tone_channel: BCS sfx_skip
+.sfx_play
+    JSR note_pitch
+    LDX EA_NOTE: LDY notes+1,X
+    LDX EA_CH: JSR sound_flush
+    JMP sfx_more
+.sfx_follow
+    JSR note_pitch
+    LDX EA_NOTE: LDY notes+1,X
+    LDX EA_CH: JSR sound_queue
+    LDX EA_CH: BEQ sfx_more
+    LDX EA_NOTE: LDA notes+1,X: JSR busy_longer
+.sfx_more
+    LDX EA_NOTE: LDA notes+2,X: BPL sfx_done
+    TXA: CLC: ADC #4: JMP sfx_note
+.sfx_skip
+    ; No tone channel at this priority: drop the note and those queued after.
+    LDX EA_NOTE
+.sfx_skip_next
+    LDA notes+2,X: BPL sfx_done
+    TXA: CLC: ADC #4: TAX
+    LDA notes+2,X: AND #&40: BNE sfx_skip_next
+    TXA: JMP sfx_note
+.sfx_done
+    LDA #1: STA EA_SFX
+    JMP ok
+
+; A = pitch of note EA_NOTE, plus this effect's random variation on tone
+; channels (flags bits4..5: none, +-1, +-1/3, +-1/3/5/7 quarter-semitones).
+.note_pitch
+    LDX EA_ID: LDA sfx_flags,X: LSR A: LSR A: LSR A: LSR A: AND #3
+    LDX EA_CH: BNE pitch_vary
+    LDA #0 ; noise "pitch" selects a noise type: never vary it
+.pitch_vary
+    TAY
+    LDA EA_RNG: ASL A: BCC rng_store
+    EOR #&1D
+.rng_store
+    STA EA_RNG
+    AND jitter_mask,Y: SEC: SBC jitter_half,Y
+    LDX EA_NOTE: CLC: ADC notes,X
+    RTS
+.jitter_mask EQUB 0,2,6,14 ; even offsets, so the spread is symmetric
+.jitter_half EQUB 0,1,3,7
+
+; A = duration (1/20s). Carry clear with EA_CH = the next tone channel (in
+; turn from EA_RR) that has finished, or holds a lower-priority effect; it is
+; then held for this note at this effect's priority.
+.tone_channel
+    STA EA_LEN
+    LDY #3
+.tone_try
+    LDX EA_RR: INX: CPX #4: BCC tone_next
+    LDX #1
+.tone_next
+    STX EA_RR
+    LDA EA_CLOCK: CMP EA_UNTIL,X: LDA EA_CLOCK+1: SBC EA_UHI,X: BPL tone_take
+    LDA EA_PRIO,X: CMP EA_P: BCC tone_take ; strictly lower priority
+    DEY: BNE tone_try
+    SEC: RTS
+.tone_take
+    STX EA_CH
+    LDA EA_P: STA EA_PRIO,X
+    LDA EA_CLOCK: STA EA_UNTIL,X: LDA EA_CLOCK+1: STA EA_UHI,X
+    LDA EA_LEN
+.busy_longer ; A = duration (1/20s): hold EA_CH A*5 centiseconds longer
+    STA EA_LEN: ASL A: ASL A: CLC: ADC EA_LEN
+    LDX EA_CH: CLC: ADC EA_UNTIL,X: STA EA_UNTIL,X
+    BCC busy_done
+    INC EA_UHI,X
+.busy_done
+    LDA EA_LEN: CLC: RTS
+
+; Fixed (negative) amplitudes scale with volume; 0 and envelopes pass.
+.scale_amp
+    BPL amp_done
+    EOR #&FF: CLC: ADC #1: TAX ; magnitude 1..15
+    JSR volume_now
+    CPY #3: BEQ amp_full
+    LDA amp_third,X: CPY #2: BNE amp_negate
+    LDA amp_two_thirds,X
+    BPL amp_negate
+.amp_full
+    TXA
+.amp_negate
+    EOR #&FF: CLC: ADC #1
+.amp_done
+    RTS
+.amp_third FOR m,0,15: EQUB (m+2) DIV 3: NEXT
+.amp_two_thirds FOR m,0,15: EQUB (2*m+1) DIV 3: NEXT
+
+; MOS SOUND, four 16-bit fields: A pitch, X channel, Y duration, EA_AMP.
+.sound_flush
+    PHA: TXA: ORA #16: TAX: PLA
+.sound_queue
+    PHA: LDA #0: STA EA_SYNC: PLA
+.sound_queue_sync ; EA_SYNC = channels to wait for (SOUND &0S0C)
+    STA sound_block+4: STY sound_block+6: STX sound_block
+    LDA EA_SYNC: STA sound_block+1
+    LDA #0: STA sound_block+5: STA sound_block+7
+    LDA EA_AMP: STA sound_block+2: BMI sound_negative
+    LDA #0: BEQ sound_amp_hi
+.sound_negative
+    LDA #255
+.sound_amp_hi
+    STA sound_block+3
+    LDA #7: LDX #LO(sound_block): LDY #HI(sound_block): JMP OSWORD
+
+; Execute bank switching/copy from RAM so the source ROM cannot evict us.
+.track_template
+    PHP: SEI: LDA &F4: PHA
+    LDA EA_MBANK: STA &F4: STA &FE30
+    LDY #0
+.track_loop
+    LDA (source),Y: STA music,Y: INY: CPY EA_LEN: BNE track_loop
+    PLA: STA &F4: STA &FE30: PLP: RTS
+.track_template_end
+ASSERT track_template_end-track_template<=64
+.signature EQUB 64,16: EQUS "EAUD"
+.commands EQUW cmd_init-1,cmd_music_start-1,cmd_music_stop-1,cmd_sfx-1
+          EQUW cmd_tick-1,cmd_status-1,cmd_silence-1,cmd_volume-1
+INCLUDE "src/sfx-table.inc"
+.end
+ASSERT end<=&C000
+SAVE "build/EAUDIO.rom",&8000,&C000

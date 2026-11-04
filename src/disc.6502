@@ -1,0 +1,37 @@
+; Disc order is load speed: DFS keeps its catalogue in memory, so an overlay
+; swap costs head seeks between NIGHT and the overlay plus rotation. The
+; overlays sit beside NIGHT, most-swapped first (boss/chest/map/help NFCOMB,
+; level-up NCARDS, menus NIGHTUI); boot-only files and the 20K loading
+; picture go last. Measured in B-em on a BBC B (DFS): an overlay at track 1
+; loads in 44cs with NIGHT's reload, one at track 14 in 60cs.
+PUTBASIC "src/boot.bas", "START"
+PUTTEXT "src/boot.txt", "!BOOT", 0
+PUTFILE "build/NIGHT", "NIGHT", &1900, &1900
+PUTFILE "build/NFCOMB", "NFCOMB", &1900, &1900
+PUTFILE "build/NCARDS", "NCARDS", &1900, &1900
+PUTFILE "build/NIGHTUI", "NIGHTUI", &1900, &1900
+PUTFILE "build/NRESET", "NRESET", &1900, &1900
+PUTFILE "build/NARENA", "NARENA", &1900, &1900
+PUTFILE "build/NPLAYER", "NPLAYER", &1900, &1900
+PUTFILE "build/PELITE", "PELITE", &0900, &0900
+PUTFILE "build/PWIZARD", "PWIZARD", &0900, &0900
+PUTFILE "build/PBELL", "PBELL", &0900, &0900
+PUTFILE "build/PWYRM", "PWYRM", &0900, &0900
+PUTFILE "build/PCHOIR", "PCHOIR", &0900, &0900
+
+PUTFILE "build/ORBA", "ORBA", &2A10, &2A10
+PUTFILE "build/ORBB", "ORBB", &2A88, &2A88
+PUTFILE "build/SEEDA", "SEEDA", &2A10, &2A10
+PUTFILE "build/SEEDB", "SEEDB", &2A88, &2A88
+PUTFILE "build/STORMA", "STORMA", &2A10, &2A10
+PUTFILE "build/STORMB", "STORMB", &2A88, &2A88
+PUTFILE "build/WARDA", "WARDA", &2A10, &2A10
+PUTFILE "build/WARDB", "WARDB", &2A88, &2A88
+
+PUTFILE "build/NFLOAD", "NFLOAD", &2F00, &2F00
+PUTFILE "build/NFBOOT", "NFBOOT", &1900, &1900
+PUTFILE "build/NWEAPON", "NWEAPON", &2D29, &2D29
+PUTFILE "build/NWEAPB", "NWEAPB", &2BD6, &2BD6
+PUTFILE "build/NWEAPX", "NWEAPX", &2D69, &2D69
+PUTFILE "build/SCREEN", "SCREEN", &3000
+PUTFILE "build/WPTEST", "WPTEST", 0, 0

@@ -1,0 +1,130 @@
+; PBELL: the Bell-Warden, the first shrine's boss (a page NARENA loads to
+; KIND_HOOK; see arena-map.inc). One telegraphed attack at a time: TELL ticks
+; of cyan outline, then a white filled strike for two ticks costing BOSSDMG
+; within its reach. Phase 1: a ring round the warden; phase 2: the ring, then
+; a quarter-turn cone towards the player; phase 3: a slam where the player
+; stood, then the cone.
+CPU 0
+INCLUDE "src/nfvars.inc"
+INCLUDE "src/arena-map.inc"
+INCLUDE "build/arena-entry.inc"
+TELL=10: RING_R=40: SLAM_R=28: CONE_R=56
+HP_MAX=80
+ORG KIND_HOOK
+.start
+    JMP bell_tick ; BOSS_TICK
+    JMP bell_draw ; BOSS_DRAW
+    EQUB HP_MAX,HP_MAX*2/3,HP_MAX/3 ; BOSS_HP: life, phases 2 and 3
+    EQUS "WARDEN",0,0,0 ; BOSS_NAME
+ASSERT P%=BOSS_NAME+9
+; The attack in play: kind (1 ring, 2 slam, 3 cone; bit7 striking), centre,
+; ticks left, cone quarter; ticks to the next; ring or cone next.
+.a_hz EQUB 0: .a_hzu EQUB 0: .a_hzy EQUB 0: .a_hzt EQUB 0: .a_hzdir EQUB 0
+.a_cool EQUB 20: .a_alt EQUB 0: .a_k EQUB 0
+.a_radius EQUB RING_R,SLAM_R,CONE_R
+.a_cooldown EQUB 30,24,18 ; ticks between attacks, by phase
+.bell_tick
+    LDA ARENA_WON: BNE a_out
+    LDA a_hz: BNE a_attacking
+    DEC a_cool: BNE a_out
+    ; Phase 1 rings; then rings (phase 3: on the player) and cones in turn.
+    LDA a_alt: EOR #1: STA a_alt
+    LDX ARENA_PHASE: BEQ a_ring
+    LSR A: BCS a_cone
+    CPX #2: BNE a_ring
+    LDA #2: LDX #0: BEQ a_aim ; the slam, at the player
+.a_cone
+    JSR a_quarter: STA a_hzdir
+    LDA #3: BNE a_aim_guardian
+.a_ring
+    LDA #1
+.a_aim_guardian
+    LDX #1
+.a_aim ; A = kind, X = the slot it centres on
+    STA a_hz
+    LDA OX,X: STA a_hzu
+    LDA OY,X: CLC: ADC #8: STA a_hzy
+    LDA #TELL: STA a_hzt
+    RTS
+.a_attacking
+    DEC a_hzt: BNE a_out
+    LDA a_hz: BPL a_strike
+    LDA #0: STA a_hz ; spent: wait for the next attack
+    LDX ARENA_PHASE: LDA a_cooldown,X: STA a_cool
+.a_out
+    RTS
+.a_strike
+    ORA #128: STA a_hz: LDA #2: STA a_hzt ; the strike shows two ticks
+    LDA a_hz: AND #3: TAX: LDA a_radius-1,X: STA a_k
+    CPX #3: BNE a_reach
+    JSR a_quarter: CMP a_hzdir: BNE a_out ; a cone only hits its quarter
+.a_reach
+    ; Distance from the centre to the player's, about max + min/2.
+    LDA OX: SEC: SBC a_hzu: BCS a_dx_abs
+    EOR #&FF: ADC #1
+.a_dx_abs
+    CMP #64: BCS a_out
+    ASL A: ASL A: STA TMP0 ; |dx| in pixels
+    LDA OY: CLC: ADC #8: SEC: SBC a_hzy: BCS a_dy_abs
+    EOR #&FF: ADC #1
+.a_dy_abs
+    CMP TMP0: BCC a_dy_min
+    LSR TMP0: JMP a_dist ; |dy| the larger: add |dx|/2
+.a_dy_min
+    LSR A ; |dx| the larger: add |dy|/2
+.a_dist
+    CLC: ADC TMP0: BCS a_out
+    CMP a_k: BCS a_out
+    LDA BOSSDMG: JMP ARENA_HURT
+; The player's quarter-turn direction from the guardian (0 right, 64 down).
+.a_quarter
+    LDA OY: SEC: SBC OY+1: PHP: BCS a_q_dy
+    EOR #&FF: ADC #1
+.a_q_dy
+    LSR A: LSR A: STA TMP1 ; |dy| in 4-pixel units
+    LDA OX: SEC: SBC OX+1: STA TMP0
+    BPL a_q_dx
+    EOR #&FF: CLC: ADC #1
+.a_q_dx
+    CMP TMP1: BCC a_q_vertical
+    PLP: LDA #0: BIT TMP0: BPL a_q_done
+    LDA #128
+.a_q_done
+    RTS
+.a_q_vertical
+    PLP: LDA #64: BCS a_q_done
+    LDA #192: RTS
+; The attack in play: a cyan outline while telegraphed (ARC25: full turns for
+; rings, a quarter sector for the cone), white filled when it strikes.
+.bell_draw
+    LDA ARENA_WON: BNE a_q_done
+    LDA a_hz: BEQ a_q_done
+    AND #3: TAX
+    LDA a_hzu: ASL A: ASL A: STA EGBUF+8: LDA #0: ROL A: STA EGBUF+9
+    LDA EGBUF+8: CLC: ADC #6: STA EGBUF+8: BCC a_hz_y
+    INC EGBUF+9
+.a_hz_y
+    LDA a_hzy: STA EGBUF+10: LDA #0: STA EGBUF+11
+    LDA a_radius-1,X
+    BIT a_hz: BPL a_hz_arc
+    CPX #3: BEQ a_hz_arc
+    ; A ring's strike is a filled CIRCLE22 (white): far cheaper than a filled
+    ; full-turn arc, and tracked (erased next frame) in the world as well.
+    STA EGBUF+15: LDA #0: STA EGBUF+12
+    LDA #3: STA EGBUF+13: LDA #1: STA EGBUF+14
+    LDA #22: JMP ARENA_EG_CALL
+.a_hz_arc
+    STA EGBUF+12
+    LDY #2: LDA #12+2 ; coarse segments, a full turn
+    CPX #3: BNE a_hz_shape
+    LDA a_hzdir: SEC: SBC #32: STA EGBUF+15: CLC: ADC #64: STA EGBUF+16
+    LDA #12
+.a_hz_shape
+    BIT a_hz: BPL a_hz_draw
+    ORA #1: LDY #3 ; the strike: filled, white
+.a_hz_draw
+    STA EGBUF+14: STY EGBUF+13
+    LDA #25: JMP ARENA_EG_CALL
+.end
+ASSERT end<=KIND_HOOK_END
+SAVE "build/PBELL",start,end

@@ -1,0 +1,84 @@
+; Small bootstrap: show the loading bitmap before loading any game overlay.
+; MODE/palette go through MOS VDU and SCREEN loads to FFFF3000 (host memory),
+; so the same artwork appears on host and Tube machines.
+CPU 0
+INCLUDE "build/splash.inc"
+LOADER=&2FB0 ; the NIGHT loader runs past NFLOAD's code, in its page
+ORG &1900
+.start
+    ; MOS Escape becomes ordinary ASCII27 (pause/cancel), never a CLI exit.
+    LDA #229: LDX #1: LDY #0: JSR &FFF4
+    LDA #124: JSR &FFF4 ; discard any pre-existing Escape condition
+    ; Players save to this disc, and a save that fails stops the game, so a
+    ; write-protected disc is caught here. WPTEST exists only for this: writing
+    ; its attributes back unchanged makes the filing system rewrite the
+    ; catalogue, as every save does, and leaves all file contents alone.
+    LDA &202: STA wp_brkv: LDA &203: STA wp_brkv+1
+    LDA #LO(wp_error): STA &202: LDA #HI(wp_error): STA &203
+    TSX: STX wp_stack
+.wp_test
+    LDA #5: LDX #LO(wp_block): LDY #HI(wp_block): JSR &FFDD
+    LDA #4: LDX #LO(wp_block): LDY #HI(wp_block): JSR &FFDD
+.wp_done
+    LDA wp_brkv: STA &202: LDA wp_brkv+1: STA &203
+    LDA #LO(art): STA &70: LDA #HI(art): STA &71
+    LDX #SPLASH_PRE: JSR send ; MODE 1, all colours black while the art loads
+    LDX #LO(load_screen): LDY #HI(load_screen): JSR &FFF7
+    LDX #art_end-art-SPLASH_PRE: JSR send ; the art's palette reveals it
+    ; The resident overlay loader, then NIGHT over this bootstrap.
+    LDX #LO(load_nfload): LDY #HI(load_nfload): JSR &FFF7
+    LDX #load_end-load_code-1
+.copy_loader
+    LDA load_code,X: STA LOADER,X: DEX: BPL copy_loader
+    JMP LOADER
+.load_code
+    LDA #&FF: LDX #LO(LOADER+block-load_code): LDY #HI(LOADER+block-load_code): JSR &FFDD
+    JMP &1900
+.block
+    EQUW LOADER+game-load_code
+    EQUB 0,&19,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+.game EQUS "NIGHT",13
+.load_end
+.send ; X bytes from (&70) to VDU
+    LDY #0: LDA (&70),Y: JSR &FFEE
+    INC &70: BNE send_next
+    INC &71
+.send_next
+    DEX: BNE send
+    RTS
+.wp_error ; DFS "Disc read only" and ADFS "Disc protected" are both &C9. Any
+    ; other error is ignored at first, then keeps the warning up (no disc yet).
+    CLI
+    LDX wp_stack: TXS
+    LDY #0: LDA (&FD),Y: CMP #&C9: BEQ wp_warn
+    LDA wp_warned: BNE wp_warn
+    JMP wp_done
+.wp_warn
+    STA wp_warned
+    LDA #LO(wp_text): STA &70: LDA #HI(wp_text): STA &71
+    LDX #wp_text_end-wp_text: JSR send
+    JSR &FFE0
+    JMP wp_test
+.wp_brkv EQUW 0
+.wp_stack EQUB 0
+.wp_warned EQUB 0
+.wp_block
+    EQUW wp_file
+    SKIP 16
+.wp_file EQUS "WPTEST",13
+.wp_text
+    EQUB 22,7,23,1,0,0,0,0,0,0,0,0
+    EQUB 31,4,3,129,141: EQUS "This disc is write protected"
+    EQUB 31,4,4,129,141: EQUS "This disc is write protected"
+    EQUB 31,2,7: EQUS "Nightfall saves your player to disc."
+    EQUB 31,2,9: EQUS "Turn off write protection, then press"
+    EQUB 31,2,10: EQUS "any key to carry on."
+.wp_text_end
+.load_screen EQUS "LOAD SCREEN FFFF3000",13
+.load_nfload EQUS "LOAD NFLOAD",13
+ASSERT load_end-load_code<=&3000-LOADER
+ASSERT wp_text_end-wp_text<256
+.art INCBIN "build/splash.vdu"
+.art_end
+ASSERT art_end<=&2F00
+SAVE "build/NFBOOT",start,art_end,start

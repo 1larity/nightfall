@@ -1,0 +1,242 @@
+; Paged cold overlay: boss spawn/chest reward (entry13), reset (11), map (4) and
+; help (14). Loaded into the shared &1900 window, then NIGHT is restored.
+CPU 0
+INCLUDE "src/nfvars.inc"
+INCLUDE "build/night-entry.inc" ; NIGHT_ROM_SPRITE
+BOSSLO=&2E97: BOSSHI=&2E98: BOSSN=&2E99
+DIR=&2DC0: FRAME=&2E83: IFRAME=&2E85: DEMO=&2E86: DEAD=&2EAA
+CAMX=&2E90: CAMY=&2E91: CAMYHI=&2E92
+OSWORD=&FFF1
+ORG &1900
+.start
+EQUS "EGOV": EQUB 2,16: EQUW end-start
+JMP boss_spawn
+JMP boss_spawn
+JMP boss_spawn
+JMP boss_spawn
+JMP map_screen
+JMP boss_spawn
+JMP boss_spawn
+JMP boss_spawn
+JMP boss_spawn
+JMP boss_spawn
+JMP boss_spawn
+JMP boss_spawn ; (11, the run reset, is NRESET's)
+JMP boss_spawn
+JMP boss_spawn
+JMP help_screen
+.boss_spawn
+    LDX SPAWNSLOT: BEQ boss_new
+    JMP open_chest
+.boss_new
+    ; The run's events (MINUTE counts them, on the run clock, which waits in
+    ; an arena): a boss at minutes 1, 3, 5; a shrine at 2 and 4; the final
+    ; shrine at 6 (sealed until the others are cleansed; winning it ends the
+    ; run). Then two minutes to finish: the hardest tier at 7, the horde's
+    ; warning at 7:30 (event 8), and from 8:00 (event 9) an elite a minute, a
+    ; boss with no chest, until they overwhelm the player. The tier follows
+    ; the events: level-ups never move it.
+    INC MINUTE
+    JSR roster_change
+    LDA #&58: STA BOSSLO: LDA #2: STA BOSSHI
+    LDA MINUTE: CMP #7: BCC minute_tier
+    LDX #5: STX TIER ; escalation: overwhelm with hard enemies
+    CMP #9: BCS boss_minute ; 8:00 on: elites
+    LDA #&2C: STA BOSSLO: LDA #1: STA BOSSHI ; 30 s to the next event
+    LDA MINUTE: CMP #8: BEQ horde_warning
+    RTS
+.horde_warning
+    ; The HUD's top row warns on the final shrine's slot (the engine shows a
+    ; shrine's bar there): full, until the first elite's own bar.
+    LDX #10
+.horde_shrine
+    LDA KIND,X: CMP #SHRINE: BNE horde_next
+    LDA DIR,X: CMP #SHRINE_FINAL: BEQ horde_set
+.horde_next
+    DEX: BNE horde_shrine
+    RTS
+.horde_set
+    STX BOSSSLOT
+    LDA #1: STA LIFE,X
+    LDY #horde_bar_end-horde_bar-1
+.horde_copy
+    LDA horde_bar,Y: STA BOSSBAR,Y: DEY: BPL horde_copy
+    LDX #10: JMP eaud_sfx ; the fanfare
+.minute_tier
+    CMP #5: BCC minute_tier_set
+    LDA #4
+.minute_tier_set
+    STA TIER
+    LDA MINUTE: LSR A: BCS boss_minute
+    JMP shrine_new
+.boss_minute
+    LDX #10: JSR eaud_sfx ; boss fanfare
+    INC BOSSN
+    JSR fixed_slot: BCC place
+    DEC BOSSN
+.minute_retry
+    ; No enemy slot left: retry this minute's event in one second.
+    DEC MINUTE
+    LDA #10: STA BOSSLO: LDA #0: STA BOSSHI
+    RTS
+; A free enemy slot, or an ordinary enemy's; never a boss or a fixed object.
+; X = slot with carry clear, carry set if none.
+.fixed_slot
+    LDX #1
+.find
+    LDA KIND,X: BEQ found
+    INX: CPX #11: BNE find
+    LDX #1
+.find_replacement
+    LDA KIND,X: CMP #9: BEQ keep_slot
+    CMP #SHRINE: BCC found
+.keep_slot
+    INX: CPX #11: BNE find_replacement
+    SEC: RTS
+.found
+    CLC: RTS
+.shrine_new
+    ; A shrine far across the world (half the torus away vertically): find it
+    ; with the map. It stays until used.
+    JSR fixed_slot: BCS minute_retry
+    LDA #SHRINE: STA KIND,X
+    LDA #0: STA LIFE,X
+    LDA MINUTE: CMP #6: LDA #0: BCC shrine_dir
+    LDA #SHRINE_FINAL ; minute 6: the last shrine
+.shrine_dir
+    STA DIR,X
+    JSR random: AND #63: CMP #48: BCC cs_x1
+    SBC #40
+.cs_x1
+    ADC #6: STA OX,X ; 6..53 of the 64 columns
+    JSR random: STA OY,X
+    LDA #2: STA OYH,X
+    LDX #9: JMP eaud_sfx ; a shimmer as it appears
+.place
+    LDA #9: STA KIND,X
+    LDA #0: STA OYH,X ; spawns at a screen edge, in the on-screen band
+    LDA MINUTE: CMP #9: LDA BOSSN: BCC boss_dir
+    ORA #ELITE ; 8:00 on: an elite (no chest)
+.boss_dir
+    STA DIR,X
+    AND #&7F: ASL A: ASL A: STA TMP0
+    ASL A: CLC: ADC TMP0: CLC: ADC #20
+    CMP #201: BCC life
+    LDA #200
+.life
+    STA LIFE,X
+    LDA DIR,X: BPL boss_hp
+    ; An elite: its DIR counts its age from 0 and the elite page moves it.
+    LDA #ELITE: STA DIR,X
+    LDA KIND_FLAGS+9: AND #4: BNE boss_hp ; the first elite loads the page
+    LDA #0: JSR phase_load
+    LDA KIND_FLAGS+9: ORA #4: STA KIND_FLAGS+9
+.boss_hp
+    LDA LIFE,X
+    ; Health bar for this boss: the engine refreshes the value each frame.
+    STX BOSSSLOT
+    PHA
+    LDA MAXHP: LSR A: LSR A ; MAXHP >= 32: never 0
+    STA BOSSDMG ; touching a boss costs a quarter of max HP
+    PLA
+    LDY #boss_bar_end-boss_bar-1
+.bar_copy
+    PHA: LDA boss_bar,Y: STA BOSSBAR,Y: PLA
+    DEY: BPL bar_copy
+    STA BOSSBAR+18 ; maximum = starting life
+    JSR random: AND #63: CMP #48: BCC cs_x2
+    SBC #40
+.cs_x2
+    ADC #6: STA OX,X ; 6..53 of the 64 columns
+    JSR random: AND #1: BEQ top
+    LDA #216: BNE store_y
+.top
+    LDA #8
+.store_y
+    STA OY,X
+    RTS
+; EGFX PROGRESS_BAR27 (v2): "BOSS" inline at a 4-pixel advance, 160 wide,
+; centred in the ring HUD's caller row.
+.boss_bar EQUB 64,8: EQUS "EG": EQUB 2,27,0,0
+EQUW 48: EQUB 240: EQUW 160: EQUB &83,1,0: EQUW 0,0: EQUB 0,4
+EQUS "BOSS",0
+.boss_bar_end
+; The horde's warning (7:30): a full bar, its title all the room BOSSBAR has.
+.horde_bar EQUB 64,8: EQUS "EG": EQUB 2,27,0,0
+EQUW 16: EQUB 240: EQUW 224: EQUB &83,1,0: EQUW 0,1: EQUB 0,4
+EQUS "THE HORDE",0
+.horde_bar_end
+ASSERT horde_bar_end-horde_bar<=32 ; BOSSBAR..&2C5F
+; The roster: at these events the two enemy types (kinds 2, 3) change, and
+; kind 2 first spawns 30 seconds after. The run reset installs the opening
+; one (the enemy core's tables). Every event then sets the types' speeds:
+; their own and the tier's.
+.roster_change
+    LDX #0
+.roster_find
+    LDA roster,X: BEQ roster_speeds
+    CMP MINUTE: BEQ roster_apply
+    TXA: CLC: ADC #roster_row: TAX: BNE roster_find
+.roster_apply
+    LDA roster+1,X: STA KIND_XLAT+2: LDA roster+2,X: STA KIND_FLAGS+2
+    LDA roster+3,X: STA KIND_XLAT+3: LDA roster+4,X: STA KIND_FLAGS+3
+    LDA roster+5,X: STA TYPE_BASE: LDA roster+6,X: STA TYPE_BASE+1
+    LDA roster+7,X: STA TYPE_LIFE: LDA roster+8,X: STA TYPE_LIFE+1
+    LDA roster+9,X: STA TYPE_SHARE
+    LDA roster+10,X: STA TYPE_DROP: LDA roster+11,X: STA TYPE_DROP+1
+    LDA RUNTICKS: CLC: ADC #LO(300): STA TYPE_FROM
+    LDA RUNTICKSH: ADC #HI(300): STA TYPE_FROM+1
+    LDA roster+12,X: BEQ roster_speeds
+    LDA #1: JSR phase_load ; the wizard's page
+.roster_speeds
+    ; The tier this event sets (min(MINUTE, 4), then 5 from 7).
+    LDA MINUTE: CMP #7: LDY #5: BCS roster_tier
+    TAY: CPY #5: BCC roster_tier
+    LDY #4
+.roster_tier
+    LDX #1
+.roster_speed
+    LDA TYPE_BASE,X: CLC: ADC tier_speed,Y: STA TYPE_SPEED,X
+    DEX: BPL roster_speed
+    RTS
+.tier_speed EQUB 0,0,1,2,4,6 ; eighths of a pixel a tick added, by tier
+; Load a phase's page to KIND_HOOK from the disc: A = 0 PELITE, 1 PWIZARD
+; (PHASE_PAGE remembers it for an arena's return). X is kept.
+.phase_load
+    TAY: INY: STY PHASE_PAGE: DEY: TXA: PHA
+    LDA #0: LDX #17
+.phase_clear
+    STA FILEBLOCK,X: DEX: BPL phase_clear
+    LDA phase_lo,Y: STA FILEBLOCK: LDA #HI(phase_names): STA FILEBLOCK+1
+    LDA #HI(KIND_HOOK): STA FILEBLOCK+3 ; exec-low 0: load at KIND_HOOK
+    LDA #&FF: LDX #LO(FILEBLOCK): LDY #HI(FILEBLOCK): JSR &FFDD
+    PLA: TAX: RTS
+.phase_lo EQUB LO(phase_names),LO(phase_wizard)
+.phase_names EQUS "PELITE",13
+.phase_wizard EQUS "PWIZARD",13
+ASSERT HI(phase_names)=HI(phase_wizard)
+; Event; kind2 sprite and flags; kind3 sprite and flags; speeds; lives;
+; kind2's share of spawns in 256; heal chances in 256; 1 to load the wizard's
+; page.
+.roster
+EQUB 2, 0,3+4+8, 3,3+32, 10,8, 2,1, 40, 128,13, 1 ; 2:00 the bats leave: ghouls and a rare wizard
+.roster_second
+roster_row=roster_second-roster
+EQUB 4, 2+64,3+32, 3,3+32, 26,8, 0,1, 96, 128,13, 0 ; 4:00 the runners: faster, cyan
+EQUB 0
+.random
+    LDA RAND: ASL A: BCC random_store
+    EOR #&1D
+.random_store
+    STA RAND
+    RTS
+INCLUDE "src/chests.inc"
+INCLUDE "src/help.inc"
+INCLUDE "src/map.inc"
+INCLUDE "src/menu-audio.inc"
+INCLUDE "src/hint-text.inc"
+MENU_GFX=help_gfx
+INCLUDE "src/menu-frame.inc"
+.end
+ASSERT end<=&2400
+SAVE "build/NFCOMB",start,end,start

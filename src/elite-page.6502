@@ -1,0 +1,61 @@
+; PELITE: the elite phase's page, loaded to KIND_HOOK (&0900) with the first
+; elite. KIND_HOOK: X = slot (kept), Y = kind. Carry clear: the engine moves
+; it. Carry set: moved here; the engine tests contact.
+CPU 0
+INCLUDE "src/nfvars.inc"
+DIR=&2DC0: FRAME=&2E83
+ORG KIND_HOOK
+.start
+    JMP eh_kind ; KIND_HOOK
+    RTS ; KIND_DRAW: nothing of its own to draw
+.eh_kind
+    CPY #9: BNE eh_engine
+    LDA DIR,X: BPL eh_engine ; a boss: it waits off screen as usual
+    ; Age: DIR bits0..6 count 64-tick periods (6.4 s) since it appeared.
+    LDA FRAME: AND #63: BNE eh_aged
+    INC DIR,X: BNE eh_aged
+    DEC DIR,X ; at most 127
+.eh_aged
+    ; Moves a tick: one every other tick at first, then one, two and three
+    ; from 8, 16 and 24 periods (about 51 s, 1:42 and 2:34).
+    LDA DIR,X: AND #&7F: LSR A: LSR A: LSR A
+    CMP #3: BCC eh_count
+    LDA #3
+.eh_count
+    TAY: BNE eh_move
+    LDA FRAME: LSR A: BCS eh_done
+    INY
+.eh_move
+    ; X: one 4-pixel unit the short way round the torus, on screen or off.
+    LDA OX,X: SEC: SBC OX: BEQ eh_y
+    ASL A: LDA #&FF: BCC eh_xadd
+    LDA #1
+.eh_xadd
+    CLC: ADC OX,X: STA OX,X
+.eh_y
+    ; Y: one pixel, across the 1024-pixel torus when out of the screen's band.
+    LDA OYH,X: BNE eh_far
+    LDA OY,X: CMP OY: BEQ eh_next
+    BCS eh_up
+.eh_down
+    INC OY,X: BNE eh_wrap
+    INC OYH,X: BNE eh_wrap
+.eh_far
+    CMP #2: BCS eh_down ; above the screen (bands 2..3): come down
+.eh_up
+    LDA OY,X: BNE eh_up_low
+    DEC OYH,X
+.eh_up_low
+    DEC OY,X
+.eh_wrap
+    LDA OYH,X: AND #3: STA OYH,X
+.eh_next
+    DEY: BNE eh_move
+.eh_done
+    LDA #0: CMP OYH,X ; carry set (test contact) only within the band
+    RTS
+.eh_engine
+    CLC: RTS
+.end
+ASSERT end<=KIND_HOOK_END
+SAVE "build/PELITE",start,end

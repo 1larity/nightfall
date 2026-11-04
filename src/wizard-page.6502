@@ -1,0 +1,87 @@
+; PWIZARD: the wizard phase's page, loaded to KIND_HOOK (&0900) when the
+; roster brings the wizard (kind2). The wizard walks in at its type's speed
+; and stands within 128 pixels across. Every 32 ticks it strikes the player
+; with lightning: 1 HP at once (none while the player is protected after a
+; hit), and a white line from the wizard to the player for one frame.
+CPU 0
+INCLUDE "src/nfvars.inc"
+INCLUDE "build/night-entry.inc" ; NIGHT_ROM_SPRITE, NIGHT_EG_CALL
+INCLUDE "build/sprite-map.inc" ; SPR_WIZARD, SPR_BLANK
+INCLUDE "build/sword-bank.inc" ; SWORD_BANK: the companion ROM's bank
+FRAME=&2E83: IFRAME=&2E85
+WZ_SLOT=TYPE_COUNT ; free while drawing
+WZ_BOLT=KIND_HOOK_END-1 ; the slot of the wizard whose strike is drawn next
+ASSERT (SPR_WIZARD AND 1)=0
+ORG KIND_HOOK
+.start
+    JMP wz_hook ; KIND_HOOK: X = slot (kept), Y = kind
+; KIND_DRAW, once a frame after the actors: each wizard on screen from the
+; 16x16 ROM pack at a 4-pixel X, its two-frame walk facing left, or mirrored
+; (EGFX35 flag &10) when the player is to its right; then this tick's strike.
+    LDX #10
+.wz_draw
+    LDA KIND,X: CMP #2: BNE wz_draw_next
+    JSR seen: BCS wz_draw_next
+    STA EGBUF+10 ; (seen leaves OY in A)
+    STX WZ_SLOT
+    LDA OX,X: ASL A: ASL A: STA EGBUF+8
+    LDA #0: STA EGBUF+9: STA EGBUF+11
+    LDY OX,X: CPY OX: BCS wz_facing
+    LDA #&10 ; mirrored: facing right
+.wz_facing
+    STA EGBUF+14
+    LDA FRAME: LSR A: AND #1: ORA #SPR_WIZARD: STA EGBUF+12
+    LDA #SWORD_BANK: STA EGBUF+16: LDA #NFSPR16_PAGE: STA EGBUF+17
+    LDA #35: JSR NIGHT_EG_CALL
+    LDX WZ_SLOT
+.wz_draw_next
+    DEX: BNE wz_draw
+    LDX WZ_BOLT: BEQ wz_drawn
+    ; The strike: a line from the wizard's middle to the player's (EGFX
+    ; LINE10). The world restores only the boxes of sprites drawn in it, so
+    ; a blank 4x4 sprite on the line's end (the player blinks after a hit)
+    ; joins the wizard's box to cover the line on that page's next frame.
+    LDA #0: STA WZ_BOLT
+    STA EGBUF+9: STA EGBUF+11: STA EGBUF+17: STA EGBUF+21
+    LDA OX,X: ASL A: ASL A: ADC #8: STA EGBUF+8
+    LDA OY,X: CLC: ADC #8: STA EGBUF+10
+    LDA OX: ASL A: ASL A: ADC #2: STA EGBUF+16 ; the knight's middle (x122)
+    LDA OY: CLC: ADC #8: STA EGBUF+20
+    LDA #3: STA EGBUF+13 ; white
+    LDA #10: JSR NIGHT_EG_CALL
+    LDA #120: STA EGBUF+8: LDA #118: STA EGBUF+10
+    LDA #0: STA EGBUF+9: STA EGBUF+11: STA EGBUF+14
+    LDA #SPR_BLANK: STA EGBUF+12
+    LDA #SWORD_BANK: STA EGBUF+16: LDA #NFSPR4_PAGE: STA EGBUF+17
+    LDA #35: JMP NIGHT_EG_CALL
+.wz_drawn
+    RTS
+
+.wz_hook
+    ; Off screen, or outside 128 pixels across: the engine's (it walks the
+    ; wizard in, and despawns it off screen).
+    JSR seen: BCS wz_engine
+    LDA OX: SEC: SBC OX,X: BCS wz_dx
+    EOR #&FF: ADC #1
+.wz_dx
+    CMP #32: BCS wz_engine
+    ; Within range it stands, and strikes on its own beat of 32 ticks.
+    TXA: ASL A: ASL A: ASL A: ADC FRAME: AND #31: BNE wz_held
+    STX WZ_BOLT
+    LDA IFRAME: BNE wz_held
+    LDA HP: BEQ wz_held
+    DEC HP
+    LDA IFRAMEV: STA IFRAME
+.wz_held
+    SEC: RTS
+.wz_engine
+    CLC: RTS
+.seen ; carry clear when slot X is on screen (A = its OY)
+    LDA OYH,X: CMP #1: BCS seen_done
+    LDA OX,X: CMP #61: BCS seen_done
+    LDA OY,X: CMP #225
+.seen_done
+    RTS
+.end
+ASSERT end<=WZ_BOLT
+SAVE "build/PWIZARD",start,end

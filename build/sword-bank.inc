@@ -1,0 +1,1 @@
+SWORD_BANK=7

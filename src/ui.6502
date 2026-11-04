@@ -1,0 +1,972 @@
+; Nightfall UI disk overlay: temporarily replaces NIGHT at1900.
+; Entry table at &1908 (3-byte stride, following8-byte header): hub, load_meta, save_meta,
+; wipe_meta, draw_offer, draw_upgrades, upg_frame, menu_frame, pause_frame,
+; boot_pack (assets+meta), levelup_frame. Runs on the execution CPU (host or
+; parasite); ALL entries return to the resident2F00 loader.
+CPU 0
+DIR=&2DC0: FRAME=&2E83: IFRAME=&2E85: DEMO=&2E86: DEAD=&2EAA
+BOSSLO=&2E97: BOSSHI=&2E98: BOSSN=&2E99
+CAMX=&2E90: CAMY=&2E91: CAMYHI=&2E92
+
+OSBYTE=&FFF4: OSWORD=&FFF1
+INCLUDE "src/nfvars.inc"
+INCLUDE "build/night-entry.inc" ; NIGHT_MAIN
+INCLUDE "build/sword-bank.inc"
+RESTORE=18 ; card id after the 18 stat cards: heal-only pool fallback
+
+ORG &1900
+.ui_start
+; EGOV2: signature, ABI version, entry count, total file length.
+EQUS "EGOV": EQUB 2,16: EQUW end-ui_start
+IF CARD=0
+JMP death_frame
+ELSE
+RTS: NOP: NOP ; death summary, menu and pause run from NIGHTUI only
+ENDIF
+RTS: NOP: NOP
+RTS: NOP: NOP
+RTS: NOP: NOP
+IF CARD
+JMP draw_offer
+ELSE
+RTS: NOP: NOP ; level-up screens run from NCARDS only
+ENDIF
+JMP draw_upgrades
+JMP upg_frame
+IF CARD=0
+JMP menu_frame
+JMP pause_frame
+ELSE
+RTS: NOP: NOP
+RTS: NOP: NOP
+ENDIF
+IF CARD=0
+JMP boot_pack
+ELSE
+RTS: NOP: NOP ; asset boot always runs from NIGHTUI
+ENDIF
+IF CARD
+JMP levelup_apply
+ELSE
+RTS: NOP: NOP
+ENDIF
+
+hub_top = 48
+
+IF CARD=0
+.death_frame
+    ; STATE 3, modal: the summary stays up until SPACE, then the main menu.
+    JSR draw_hub
+    LDA #6: JSR gfxcall
+    JSR key_flush
+.death_poll
+    JSR vsync
+    JSR getkey
+    CMP #32: BNE death_poll
+    LDA #0: STA STATE
+    RTS
+.draw_hub
+    ; Every line centred; numbers without leading zeros.
+    JSR menu_background
+    ; Won the final shrine (its slot spent, SHRINE_FINAL left in DIR): the
+    ; beta's end, thanked on two lines; otherwise the fall.
+    LDX ARENASLOT: LDA KIND,X: BNE hub_fell
+    LDA DIR,X: CMP #SHRINE_FINAL: BNE hub_fell
+    LDA #LO(s_thanks): STA &F8: LDA #HI(s_thanks): STA &F9
+    LDX #40: JSR wcentre
+    LDA #LO(s_thanks2): STA &F8: LDA #HI(s_thanks2): STA &F9
+    LDX #56: BNE hub_title
+.hub_fell
+    LDA #LO(s_fell): STA &F8: LDA #HI(s_fell): STA &F9
+    LDX #48
+.hub_title
+    JSR wcentre
+    LDA RUNTICKS: STA NUM: LDA RUNTICKSH: STA NUM+1
+    JSR div10_tmp ; seconds
+    LDA #LO(s_time): STA &F8: LDA #HI(s_time): STA &F9
+    LDA #80: JSR centre_stat
+    LDA KILLS: STA NUM: LDA KILLSH: STA NUM+1
+    LDA #LO(s_kills): STA &F8: LDA #HI(s_kills): STA &F9
+    LDA #104: JSR centre_stat
+    LDA RUNGOLD: STA NUM: LDA RUNGOLDH: STA NUM+1
+    LDA #LO(s_earned): STA &F8: LDA #HI(s_earned): STA &F9
+    LDA #128: JSR centre_stat
+    LDA GOLDL: STA NUM: LDA GOLDH: STA NUM+1
+    LDA #LO(s_bank): STA &F8: LDA #HI(s_bank): STA &F9
+    LDA #152: JSR centre_stat
+    LDA #LO(s_again): STA &F8: LDA #HI(s_again): STA &F9
+    LDX #184: JMP wcentre
+
+ENDIF
+IF CARD=0
+INCLUDE "src/world-pack.inc"
+ENDIF ; the boot world setup, never NCARDS
+.vsync
+    LDA #19: JSR OSBYTE
+    RTS
+.menu_music ; start the menu score (Jupiter) unless it is already playing
+    LDX #5: JSR eaud_cmd
+    LDA eaud_block+8: BNE menu_music_on
+    LDA #HI(MENU_SCORE)
+.score_start ; A = page of a page-aligned NFASSETS score
+ASSERT LO(MENU_SCORE)=0 AND LO(CARD_SCORE)=0
+    STA eaud_block+9
+    LDA #SWORD_BANK: STA eaud_block+8
+    LDA #0: STA eaud_block+10
+    LDX #1: JMP eaud_cmd
+.menu_music_on
+    RTS
+.getkey
+    LDA #129: LDX #0: LDY #0: JSR OSBYTE
+    TXA
+    BCS getkey_none
+    CMP #97: BCC getkey_ready
+    CMP #123: BCS getkey_ready
+    AND #&DF
+.getkey_ready
+    JMP menu_click
+.getkey_none
+    LDA #0
+    RTS
+.wline
+    STA EGBUF+8: LDA #0: STA EGBUF+9
+    STX EGBUF+10: LDA #0: STA EGBUF+11
+    LDA #3: STA EGBUF+12
+    LDA #7: JMP gfxcall
+INCLUDE "src/hint-text.inc"
+wtext=htext ; A = x, X = y, (&F8) string with KEY-highlighted keys
+.number
+    PHA: LDA #144: STA TEXTX: PLA
+.number_at                ; A/X = value, Y = y, TEXTX = column; no leading zeros
+    STA NUM: STX NUM+1: STY TEXTY
+    JSR num_digits
+    LDY #0
+.na_copy
+    LDA numbuf,X: STA EGBUF+22,Y
+    INY: INX: CPX #5: BNE na_copy
+    LDA #0: STA EGBUF+22,Y
+    LDA TEXTX: PHA
+    TYA: ASL A: ASL A: ASL A: ADC TEXTX: STA TEXTX ; just past the number
+    PLA: LDX TEXTY: JMP wline
+.num_digits               ; NUM -> numbuf (five digits), X = first one shown
+    LDA #4: STA DIGIT
+.nd_loop
+    JSR div10_tmp
+    ORA #48: LDX DIGIT: STA numbuf,X
+    DEC DIGIT: BPL nd_loop
+    LDX #0
+.nd_skip
+    LDA numbuf,X: CMP #48: BNE nd_done
+    INX: CPX #4: BNE nd_skip ; 0 still shows one digit
+.nd_done
+    RTS
+.numbuf SKIP 5
+IF CARD=0
+.wcentre                  ; &F8 string centred on x=160 (8-pixel cells), X = y
+    LDY #0: STY TMP2
+.wc_len
+    LDA (&F8),Y: BEQ wc_place
+    INY: CMP #KEY: BEQ wc_len ; key markers take no space
+    INC TMP2: BNE wc_len
+.wc_place
+    LDA TMP2: ASL A: ASL A: STA TMP0
+    LDA #160: SEC: SBC TMP0: AND #&F8
+    JMP wtext
+.centre_stat              ; "label value" centred: &F8 label, NUM value, A = y
+    PHA
+    LDY #0
+.cs_label
+    LDA (&F8),Y: BEQ cs_value
+    STA linebuf,Y: INY: BNE cs_label
+.cs_value
+    JSR num_digits
+.cs_copy
+    LDA numbuf,X: STA linebuf,Y
+    INY: INX: CPX #5: BNE cs_copy
+    LDA #0: STA linebuf,Y
+    LDA #LO(linebuf): STA &F8: LDA #HI(linebuf): STA &F9
+    PLA: TAX: JMP wcentre
+.linebuf SKIP 24
+ENDIF
+.div10_tmp
+    LDX #16: LDA #0
+.d10t
+    ASL NUM: ROL NUM+1: ROL A
+    CMP #10: BCC d10t_skip
+    SBC #10: INC NUM
+.d10t_skip
+    DEX: BNE d10t
+    RTS
+
+IF CARD=0
+.upg_rank_of              ; X = index -> A = rank
+    LDA upg_zlo,X: STA &76
+    LDA upg_zhi,X: STA &77
+    LDY #0: LDA (&76),Y
+    RTS
+.upg_price                ; X = index, A = owned rank -> A = base*(rank+1)
+    STA TMP2: LDA #0
+.up_add
+    CLC: ADC upg_base,X
+    DEC TMP2: BPL up_add
+    RTS
+.draw_upgrades
+    JSR menu_background
+    LDA #LO(s_upghdr): STA &F8: LDA #HI(s_upghdr): STA &F9
+    LDX #48: JSR wcentre
+    LDA #0: STA MENUINDEX
+.du_lines
+    ; "1 VIGOUR   07/20    35": 22 cells, so the table sits centred at x=72.
+    LDX MENUINDEX: JSR upg_rank_of: STA MENURANK
+    LDA MENUINDEX: ASL A: ASL A: ASL A: ASL A: CLC: ADC #72: STA MENUROW
+    LDY #0
+    LDA #KEY: JSR du_put
+    LDA MENUINDEX: CLC: ADC #49: JSR du_put
+    LDA #KEY: JSR du_put
+    LDA #32: JSR du_put
+    LDA MENUINDEX: ASL A: ASL A: ASL A: TAX
+.du_name
+    LDA upg_names,X: JSR du_put
+    INX: CPY #12: BNE du_name
+    LDA #32: JSR du_put
+    LDA MENURANK: JSR du_two
+    LDA EGBUF+20,Y: CMP #48: BNE du_level_shown
+    LDA #32: STA EGBUF+20,Y ; " 7/20", not "07/20"
+.du_level_shown
+    LDA #'/': JSR du_put
+    LDA #UPG_LEVELS: JSR du_two
+    LDA #32: JSR du_put: LDA #32: JSR du_put: LDA #32: JSR du_put
+    LDA MENURANK: CMP #UPG_LEVELS: BCC du_cost
+    LDA #'M': JSR du_put: LDA #'A': JSR du_put: LDA #'X': JSR du_put
+    JMP du_row
+.du_cost
+    LDX MENUINDEX: JSR upg_price: PHA
+    LDX #47: SEC
+.du_hundreds
+    INX: SBC #100: BCS du_hundreds
+    TXA: CMP #48: BNE du_hundred_digit
+    LDA #32 ; no leading zero
+.du_hundred_digit
+    JSR du_put
+    PLA: SEC
+.du_drop
+    SBC #100: BCS du_drop
+    ADC #100: JSR du_two
+    ; Blank a leading tens zero too (prices under 10).
+    LDA EGBUF+19,Y: CMP #32: BNE du_row
+    LDA EGBUF+20,Y: CMP #48: BNE du_row
+    LDA #32: STA EGBUF+20,Y
+.du_row
+    LDA #0: STA EGBUF+22,Y
+    LDA #LO(EGBUF+22): STA &F8: LDA #HI(EGBUF+22): STA &F9
+    LDA #72: LDX MENUROW: JSR htext
+    INC MENUINDEX: LDA MENUINDEX: CMP #6: BEQ du_finished
+    JMP du_lines
+.du_finished
+    ; "GOLD 1234", centred.
+    LDA GOLDL: STA NUM: LDA GOLDH: STA NUM+1
+    LDA #LO(s_gold): STA &F8: LDA #HI(s_gold): STA &F9
+    LDA #176: JSR centre_stat
+    LDA #LO(s_back): STA &F8: LDA #HI(s_back): STA &F9
+    LDX #208: JSR wcentre
+    LDA #6: JMP gfxcall
+.du_two                   ; A = 0..99 as two digits
+    LDX #47: SEC
+.du_tens
+    INX: SBC #10: BCS du_tens
+    ADC #58: PHA: TXA: JSR du_put: PLA
+.du_put
+    STA EGBUF+22,Y: INY: RTS
+.upg_frame
+    ; Purchases and refunds change RAM only; one save when the shop is left.
+    LDA #0: STA upg_dirty
+.upg_loop
+    LDA DRAWN: BNE upg_poll
+    JSR draw_upgrades
+    LDA #1: STA DRAWN
+.upg_poll
+    JSR vsync
+    JSR getkey
+    BEQ upg_done
+    CMP #66: BEQ upg_back
+    CMP #81: BEQ upg_back
+    CMP #82: BEQ upg_refund
+    CMP #49: BCC upg_done
+    CMP #55: BCS upg_done
+    SEC: SBC #49: TAX
+    JSR upg_rank_of
+    CMP #UPG_LEVELS
+    BCS upg_no
+    JSR upg_price: STA TMP1
+    LDA GOLDL: CMP TMP1
+    LDA GOLDH: SBC #0
+    BCC upg_no
+    LDA GOLDL: SEC: SBC TMP1: STA GOLDL
+    LDA GOLDH: SBC #0: STA GOLDH
+    LDY #0: LDA (&76),Y: CLC: ADC #1: STA (&76),Y
+    LDX #11: JSR eaud_sfx ; purchase chime
+.upg_changed
+    LDA #0: STA DRAWN
+    LDA #2: STA upg_dirty
+.upg_no
+.upg_done
+    JMP upg_loop
+.upg_back
+    ; Leaving: UICHOICE2 asks the engine to save (only if anything changed).
+    LDA #0: STA STATE: STA DRAWN
+    LDA upg_dirty: STA UICHOICE
+    RTS
+.upg_dirty EQUB 0
+.upg_refund
+    ; Respec: return 95% of everything spent (each level cost base*(rank+1)),
+    ; zero the ranks; saved with the rest when the shop is left.
+    LDA #0: STA NUM: STA NUM+1
+    LDX #5
+.ur_item
+    STX MENUINDEX
+    JSR upg_rank_of: STA MENURANK
+    LDA #0: STA (&76),Y
+.ur_level
+    DEC MENURANK: BMI ur_next
+    LDX MENUINDEX: LDA MENURANK: JSR upg_price
+    CLC: ADC NUM: STA NUM
+    BCC ur_level
+    INC NUM+1: JMP ur_level
+.ur_next
+    LDX MENUINDEX: DEX: BPL ur_item
+    ; Keep total - total/20.
+    LDA NUM: STA TMP0: LDA NUM+1: STA TMP1
+    JSR div10_tmp: LSR NUM+1: ROR NUM
+    LDA TMP0: SEC: SBC NUM: STA TMP0
+    LDA TMP1: SBC NUM+1: STA TMP1
+    LDA GOLDL: CLC: ADC TMP0: STA GOLDL
+    LDA GOLDH: ADC TMP1: STA GOLDH
+    JMP upg_changed
+ELSE
+.draw_upgrades
+.upg_frame
+    RTS
+ENDIF
+IF CARD
+.draw_offer
+    JSR menu_background
+    LDA #LO(s_choose): STA &F8: LDA #HI(s_choose): STA &F9
+    LDA #80: LDX #48: JSR wtext
+    LDA #LO(s_cardhint): STA &F8: LDA #HI(s_cardhint): STA &F9
+    LDA #64: LDX #208: JSR wtext
+IF CARD
+    ; Reroll charges: one per two REROLL levels, rounded up.
+    LDA UPGF: CLC: ADC #1: LSR A: SEC: SBC REROLLUSED: BEQ offer_no_reroll
+    PHA
+    LDA #LO(s_rerollkey): STA &F8: LDA #HI(s_rerollkey): STA &F9
+    LDA #64: LDX #200: JSR wtext
+    PLA: LDX #0: LDY #200: JSR number
+.offer_no_reroll
+ENDIF
+    LDA #0: STA MENUINDEX
+.offer_loop
+    LDX MENUINDEX: LDA OFFER1,X: TAX
+    LDA offer_nlo,X: STA &F8: LDA offer_nhi,X: STA &F9
+IF CARD
+    ; Owned primary cards explicitly describe a count/rate upgrade.
+    LDY card_owner,X: BEQ offer_named
+    TXA: CMP weapon_first-1,Y: BNE offer_named
+    TYA: JSR weapon_slot: BCC offer_named
+    LDY card_owner,X
+    LDA weapon_more_lo-1,Y: STA &F8
+    LDA weapon_more_hi-1,Y: STA &F9
+.offer_named
+ENDIF
+    LDA #KEY: STA EGBUF+22: STA EGBUF+24
+    LDA MENUINDEX: CLC: ADC #49: STA EGBUF+23
+    LDA #32: STA EGBUF+25
+    LDY #0
+.offer_copy
+    LDA (&F8),Y: BEQ offer_zero
+    STA EGBUF+26,Y: INY: BNE offer_copy
+.offer_zero
+    LDA #0: STA EGBUF+26,Y
+    LDA MENUINDEX: ASL A: CLC: ADC MENUINDEX
+    ASL A: ASL A: ASL A: ASL A: CLC: ADC #64: STA MENUROW: TAX
+    LDA #LO(EGBUF+22): STA &F8: LDA #HI(EGBUF+22): STA &F9
+    LDA #48: JSR htext
+IF CARD
+    LDX MENUINDEX: LDY CARDRARITY,X
+    LDA raritylo,Y: STA &F8: LDA rarityhi,Y: STA &F9
+    LDA MENUROW: CLC: ADC #12: TAX
+    LDA #48: JSR wtext
+    LDX MENUINDEX: LDA OFFER1,X: CMP #5: BEQ offer_coverage
+    LDA CARDVALUE,X
+    PHA: LDA MENUROW: CLC: ADC #12: TAY
+    PLA: LDX #0: JSR number
+    JMP offer_stat_done
+.offer_coverage
+    ; Resulting coverage: 90 + 10 * steps degrees.
+    LDX SWORDARC: INX
+    LDA #90: LDY #0
+.cov_add
+    DEX: BMI cov_ready
+    CLC: ADC #10: BCC cov_add
+    INY: BCS cov_add
+.cov_ready
+    PHA: TYA: TAX
+    LDA MENUROW: CLC: ADC #12: TAY
+    PLA: JSR number
+    LDA #LO(s_deg): STA &F8: LDA #HI(s_deg): STA &F9
+    LDA MENUROW: CLC: ADC #12: TAX
+    LDA TEXTX: JSR wtext ; straight after the number
+.offer_stat_done
+ENDIF
+    INC MENUINDEX: LDA MENUINDEX: CMP #3: BEQ offer_done
+    JMP offer_loop
+.offer_done
+    LDA #6: JMP gfxcall
+ENDIF
+.gfxcall                 ; OSWORD NF/v1 transport for overlay drawing
+    STA EGBUF+5
+    LDA #64: STA EGBUF: LDA #8: STA EGBUF+1
+    LDA #'E': STA EGBUF+2: LDA #'G': STA EGBUF+3
+    LDA #1: STA EGBUF+4: LDA #0: STA EGBUF+7
+    LDA #&C0: LDX #LO(EGBUF): LDY #HI(EGBUF): JSR &FFF1
+    RTS
+IF CARD=0
+; Main menu (engine STATE 0): SPACE starts a run.
+.menu_frame
+    JSR menu_music
+    JSR draw_menu
+.menu_poll
+    JSR vsync
+    JSR getkey
+    BEQ menu_poll
+    CMP #32: BEQ menu_start
+    CMP #72: BEQ menu_help
+    CMP #80: BEQ menu_profiles
+    CMP #85: BNE menu_poll
+    ; U: the shop. The menu enters its state itself (the engine just loops).
+    LDA #4: STA UICHOICE: STA STATE
+    LDA #0: STA DRAWN
+    RTS
+.menu_profiles
+    LDA #15: STA UICHOICE: RTS
+.menu_help
+    LDA #14: STA UICHOICE: RTS
+.menu_start
+    LDA #1: STA UICHOICE
+    LDX #6: JMP eaud_cmd ; silence: no music in play
+.draw_menu
+    JSR menu_background
+    JSR draw_menu_art
+    ; Every line is centred on x=160 (to the nearest 8-pixel cell); the block
+    ; (y72..183) is centred on the frame's inner area.
+    LDX #0
+.menu_line
+    STX MENUINDEX
+    LDA menu_text_lo,X: STA &F8: LDA menu_text_hi,X: STA &F9
+    LDA menu_text_y,X: TAX: JSR wcentre
+    LDX MENUINDEX: INX: CPX #7: BNE menu_line
+    LDA #6: JSR gfxcall
+    ; Shown: the game palette (logical 1 red, 2 cyan, 3 white), which also
+    ; replaces the loading art's on the first menu.
+    LDX #0
+.boot_vdu
+    LDA boot_vdu_bytes,X: JSR &FFEE
+    INX: CPX #18: BEQ boot_vdu_done
+    CPX #28: BNE boot_vdu
+.boot_vdu_done
+    RTS
+.draw_menu_art
+    LDX #0
+.menu_art_loop
+    STX MENUINDEX
+    LDA menu_art,X: STA EGBUF+8
+    LDA menu_art+1,X: STA EGBUF+10
+    LDA #0: STA EGBUF+9: STA EGBUF+11
+    LDA menu_art+2,X: STA EGBUF+16
+    LDA #0: STA EGBUF+17
+    LDA menu_art+3,X: STA EGBUF+20
+    LDA #0: STA EGBUF+21
+    LDA menu_art+4,X: STA EGBUF+13
+    LDA #10: JSR gfxcall
+    LDX MENUINDEX: TXA: CLC: ADC #5: TAX
+    CPX #menu_art_end-menu_art: BCC menu_art_loop
+    RTS
+; Pause (engine STATE 5): P/ESC resumes, R restarts, M returns to menu.
+.pause_frame
+    JSR menu_music ; paused is a menu: the score plays until play resumes
+    JSR draw_pause
+    JSR key_flush
+.pause_poll
+    JSR vsync
+    JSR getkey
+    BEQ pause_poll
+    CMP #80: BEQ pause_resume
+    CMP #82: BEQ pause_resume ; R: RESUME's red initial
+    CMP #27: BEQ pause_resume
+    CMP #81: BNE pause_poll
+    ; Q quits: the run keeps 75% of its gold, which NRESET banks and saves
+    ; before the main menu (the score carries on).
+    LDA RUNGOLDH: LSR A: STA TMP1: LDA RUNGOLD: ROR A: STA TMP0
+    LSR TMP1: ROR TMP0 ; a quarter
+    LDA RUNGOLD: SEC: SBC TMP0: STA RUNGOLD
+    LDA RUNGOLDH: SBC TMP1: STA RUNGOLDH
+    LDA #1: STA QUITRUN
+    LDA #3: STA UICHOICE
+    RTS
+.pause_resume
+    LDA #1: STA UICHOICE
+    LDX #6: JMP eaud_cmd ; silence: no music in play
+.draw_pause
+    JSR menu_background
+    ; The title is a banner rather than spaced-out ordinary text.
+    LDA #104: STA EGBUF+8: LDA #0: STA EGBUF+9
+    LDA #72: STA EGBUF+10: LDA #14: STA EGBUF+11
+    LDA #1: STA EGBUF+12
+    LDA #0: STA EGBUF+22
+    LDA #28: JSR gfxcall
+    LDA #17: STA EGBUF+5
+    LDA #0: STA EGBUF+7
+    LDA #&C1: LDX #LO(EGBUF): LDY #HI(EGBUF): JSR &FFF1
+    ; One centred instruction per line.
+    LDA #LO(s_presume): STA &F8: LDA #HI(s_presume): STA &F9
+    LDX #120: JSR wcentre
+    LDA #LO(s_pquit): STA &F8: LDA #HI(s_pquit): STA &F9
+    LDX #144: JSR wcentre
+    LDA #6: JMP gfxcall
+ENDIF
+; Boot: stage the world compositor's sprites from the companion ROM, then load meta.
+IF CARD=0
+.boot_pack
+    ; NIGHT's main loop, for the overlays' returns.
+    LDA #LO(NIGHT_MAIN): STA MAINVEC: LDA #HI(NIGHT_MAIN): STA MAINVEC+1
+    ; Shared dispatcher/hit support in unused coordinate tails; actual weapon
+    ; code loads into slot A/B on its first card pick.
+    LDA #&FF: LDX #LO(weapon_block): LDY #HI(weapon_block): JSR &FFDD
+    LDA #&FF: LDX #LO(weapb_block): LDY #HI(weapb_block): JSR &FFDD
+    LDA #&FF: LDX #LO(weapx_block): LDY #HI(weapx_block): JSR &FFDD
+    JSR world_pack
+    LDX #18 ; cursor off; the art keeps its palette until the menu is shown
+    JMP boot_vdu
+ENDIF
+; Level-up (engine STATE 2): offer three upgrades, apply the choice.
+IF CARD
+.levelup_apply
+    ; Card choice has its own score (Uranus, from the top each time; play
+    ; is silent here), then play resumes in silence.
+    LDA #HI(CARD_SCORE): JSR score_start
+    JSR levelup_choose
+    LDX #6: JMP eaud_cmd
+.levelup_choose
+    JSR make_offer
+IF CARD
+    JSR roll_cards
+ENDIF
+    JSR draw_offer
+    JSR key_flush
+.lu_poll
+    JSR vsync
+    JSR getkey
+    BEQ lu_poll
+IF CARD
+    ; R spends one permanent reroll charge for fresh offers and rarities.
+    CMP #82: BNE lu_digit
+    LDA REROLLUSED: ASL A: CMP UPGF: BCS lu_poll ; used < ceil(UPGF/2)
+    INC REROLLUSED
+    JMP levelup_choose
+.lu_digit
+ENDIF
+    CMP #49: BCC lu_poll
+    CMP #52: BCS lu_poll
+    SEC: SBC #49
+    CMP #0: BEQ lu_pick1
+    CMP #1: BEQ lu_pick2
+    LDX OFFER3: JMP lu_apply
+.lu_pick1
+    LDX OFFER1: JMP lu_apply
+.lu_pick2
+    LDX OFFER2
+.lu_apply
+IF CARD
+    STX UICHOICE
+    JSR sync_weapon_cards
+    LDX #0
+    LDA UICHOICE: CMP OFFER1: BEQ lu_value
+    INX: CMP OFFER2: BEQ lu_value
+    INX
+.lu_value
+    LDA CARDVALUE,X: STA UPGVALUE
+    LDA CARDRARITY,X: STA UPGRARITY
+    ; Resolve and apply the final absolute stat here, keeping cold work paged.
+    LDX UICHOICE
+    CPX #RESTORE: BNE lu_stat
+    ; RESTORE (exhausted pool): an unchanged Vigour store that only heals.
+    LDA #0: STA UICHOICE
+    LDA HP: CLC: ADC UPGVALUE: BCS lu_full
+    CMP MAXHP: BCC lu_heal
+.lu_full
+    LDA MAXHP
+.lu_heal
+    STA UPGSECOND
+    LDA MAXHP: STA UPGVALUE
+    JMP lu_account
+.lu_stat
+    ; A primary card acquires its weapon or upgrades its rate/count.
+    LDY card_owner,X: BEQ lu_bound
+    TXA: CMP weapon_first-1,Y: BNE lu_bound
+    TYA: JSR load_weapon
+.lu_bound
+    JSR sync_weapon_cards: LDX UICHOICE
+    ; Offered only below its cap; no cap plus its biggest step passes 255
+    ; (Vigour: 247+8), so the sum never carries.
+    LDY statlo,X: LDA &2E00,Y
+    CLC: ADC UPGVALUE
+    CMP statcap,X: BCC lu_capped
+    LDA statcap,X
+.lu_capped
+    STA UPGVALUE
+    CPX #5: BNE lu_not_arc
+    JSR arc_tables
+    JMP lu_account
+.lu_not_arc
+    CPX #4: BNE lu_not_reach
+    JSR reach_table
+    JMP lu_account
+.lu_not_reach
+    ; Orb picks rebuild the orbit table: new radius, or the base on gaining orbs.
+    CPX #8: BEQ lu_orbit
+    CPX #7: BNE lu_not_orb
+    LDY statlo+8: LDA &2E00,Y
+.lu_orbit
+    JSR orbit_tables
+    JMP lu_account
+.lu_not_orb
+    CPX #0: BNE lu_resolved
+    SEC: SBC MAXHP: CLC: ADC HP: STA UPGSECOND
+.lu_resolved
+.lu_account
+    ; All card stats live in page &2E. Apply while NCARDS is still loaded.
+    LDY UICHOICE
+    LDX statlo,Y
+    LDA UPGVALUE: STA &2E00,X
+    TYA: BNE lu_stat_applied
+    LDA UPGSECOND: STA HP
+.lu_stat_applied
+ENDIF
+    JSR xp_threshold: STA TMP0
+    LDA XP: SEC: SBC TMP0: STA XP
+    INC LEVEL
+    ; Enemy TIER follows run time in NFCOMB's boss spawn, not player level.
+    LDA #1: STA STATE
+    LDA INVALID: AND #4: ORA #2: STA INVALID
+    ; Disk/UI pause is not simulation debt.
+    LDA #1: LDX #LO(CLOCK): LDY #HI(CLOCK): JSR OSWORD
+    LDA CLOCK: STA STAMP
+    RTS
+IF CARD
+.make_offer
+    JSR sync_weapon_cards
+    ; Collect uncapped cards, then draw three distinct ones. Capped stats are
+    ; never offered, nor upgrades for an unowned weapon; an exhausted pool is
+    ; padded with RESTORE.
+    ; One entry per eligible card: no separate weapon nomination/weight.
+    ; After drawing an unlock, remove other unlocks for this offer only.
+    LDA #0: STA elig_count
+    LDX #RESTORE-1
+.mo_scan
+    LDA card_owner,X: BEQ mo_owned
+    JSR weapon_slot: BCS mo_owned
+    LDA SLOTAID: BEQ mo_empty
+    LDA SLOTBID: BNE mo_skip
+.mo_empty
+    LDY card_owner,X
+    TXA: CMP weapon_first-1,Y: BNE mo_skip
+.mo_owned
+    LDY statlo,X: LDA &2E00,Y
+    CMP statcap,X: BCS mo_skip
+.mo_add
+    TXA: LDY elig_count: STA elig,Y: INC elig_count
+.mo_skip
+    DEX: BPL mo_scan
+    LDX #0
+.mo_pick
+    STX MENUINDEX
+    LDA #RESTORE
+    LDY elig_count: BEQ mo_store
+.mo_roll
+    ; Fold the whole nonzero RNG byte into the pool. Low-bit rejection on
+    ; this small LFSR skewed first draws15..36 times per255 states; full-byte
+    ; remainder gives each entry floor(255/N) or ceil(255/N) states.
+    JSR uirandom: SEC
+.mo_range
+    SBC elig_count: BCS mo_range
+    ADC elig_count
+    TAY: LDA elig,Y: PHA
+    ; Fill the hole with the last candidate so picks stay distinct.
+    DEC elig_count: LDX elig_count: LDA elig,X: STA elig,Y
+    PLA
+.mo_store
+    LDX MENUINDEX: STA OFFER1,X
+    CMP #RESTORE: BEQ mo_next
+    TAX: LDA card_owner,X: BEQ mo_next
+    JSR weapon_slot: BCS mo_next
+    ; Selected an unowned primary. Only this offer excludes other unlocks;
+    ; general and owned upgrades keep their single entries and equal draws.
+    LDX elig_count
+.mo_prune
+    DEX: BMI mo_next
+    LDY elig,X: LDA card_owner,Y: BEQ mo_prune
+    JSR weapon_slot: BCS mo_prune ; preserves the pool index X
+    DEC elig_count: LDY elig_count: LDA elig,Y: STA elig,X
+    JMP mo_prune
+.mo_next
+    LDX MENUINDEX
+    INX: CPX #3: BNE mo_pick
+    RTS
+.elig_count EQUB 0
+.elig SKIP RESTORE
+INCLUDE "src/weapon-cards.inc"
+ENDIF
+.uirandom
+    LDA RAND: ASL A: BCC ur_ok
+    EOR #&1D
+.ur_ok
+    STA RAND: RTS
+ENDIF
+
+IF CARD=0
+.boot_vdu_bytes EQUB 19,1,1,0,0,0, 19,2,6,0,0,0, 19,3,7,0,0,0, 23,1,0,0,0,0,0,0,0,0
+.weapon_block EQUW weapon_name: EQUD MOD_WEAPONS: EQUD 0: EQUD 0: EQUD 0
+.weapon_name EQUS "NWEAPON",13
+.weapb_block EQUW weapb_name: EQUD BOX_NEAR: EQUD 0: EQUD 0: EQUD 0
+.weapb_name EQUS "NWEAPB",13
+.weapx_block EQUW weapx_name: EQUD WEAPON_HIT_HELPER: EQUD 0: EQUD 0: EQUD 0
+.weapx_name EQUS "NWEAPX",13
+ENDIF
+IF CARD=0
+.upg_zlo EQUB <UPGV, <UPGS, <UPGP, <UPGF, <UPGM, <UPGG
+.upg_zhi EQUB >UPGV, >UPGS, >UPGP, >UPGF, >UPGM, >UPGG
+ENDIF
+INCLUDE "src/xp-threshold.inc"
+IF CARD=0
+; Slots keep their save positions. Twenty small levels each (see run reset):
+; UPGV vigour +1HP, UPGS luck +2 rarity roll, UPGP ward +1 tick per 2,
+; UPGF a reroll per 2, UPGM magnet, UPGG greed ~+5% gold. Price base*(rank+1).
+UPG_LEVELS=20
+.upg_base EQUB 5,6,8,10,5,10
+.upg_names EQUS "VIGOUR  LUCK    WARD    REROLL  MAGNET  GREED   "
+ENDIF
+.s_choose EQUS "CHOOSE:",0
+.s_cardhint EQUS KEY,"1-3",KEY," SELECT   GAME PAUSED",0
+IF CARD=0
+.s_fell EQUS "YOU FELL",0
+.s_thanks EQUS "THANKS FOR PLAYING",0
+.s_thanks2 EQUS "THE BETA",0
+.s_time EQUS "TIME ",0
+.s_kills EQUS "KILLS ",0
+.s_earned EQUS "EARNED ",0
+.s_bank EQUS "BANK ",0
+.s_again EQUS "PRESS ",KEY,"SPACE",KEY," TO RETURN",0
+.s_back EQUS KEY,"B",KEY,"ACK  ",KEY,"R",KEY,"EFUND - KEEP 95 PCT",0
+.s_upghdr EQUS "UPGRADES",0
+.s_gold EQUS "GOLD ",0
+.s_mtitle EQUS "NIGHTFALL",0
+.s_msubtitle EQUS "A NIGHT OF SURVIVAL",0
+.s_shop EQUS KEY,"U",KEY,"PGRADES",0
+.s_help EQUS KEY,"H",KEY,"ELP  ",KEY,"P",KEY,"LAYERS",0
+.s_mmove EQUS KEY,"WASD",KEY," MOVE",0
+.s_mstart EQUS "PRESS ",KEY,"SPACE",KEY," TO START",0
+.menu_art
+EQUB 88,88,232,88,2 ; cyan separator under the title, centred
+.menu_art_end
+.menu_text_lo EQUB LO(s_mtitle),LO(s_msubtitle),LO(s_mmove),LO(s_mstart),LO(s_help),LO(s_shop),LO(s_mversion)
+.menu_text_hi EQUB HI(s_mtitle),HI(s_msubtitle),HI(s_mmove),HI(s_mstart),HI(s_help),HI(s_shop),HI(s_mversion)
+.menu_text_y EQUB 64,96,112,128,152,168,200
+INCLUDE "build/version.inc" ; s_mversion: "BETA 1 <commit>" (tools/build.sh)
+.s_ptitle EQUS "    PAUSED    ",0
+.s_presume EQUS KEY,"R",KEY,"ESUME",0 ; R (or P, ESC)
+.s_pquit EQUS KEY,"Q",KEY,"UIT - KEEP 75 PCT GOLD",0 ; font: no ( ) %
+ENDIF
+IF CARD
+.offer_nlo EQUB LO(o_vigour),LO(o_speed),LO(o_power),LO(o_rapid),LO(o_nova),LO(o_magnet),LO(o_crit)
+IF CARD ; weapon cards and RESTORE exist only in the card overlay
+    EQUB LO(o_orbs),LO(o_orbr),LO(o_orbd),LO(o_seeds),LO(o_tentd),LO(o_tentt),LO(o_tents),LO(o_storm),LO(o_stormd),LO(o_ward),LO(o_wardd),LO(o_restore)
+ENDIF
+.offer_nhi EQUB HI(o_vigour),HI(o_speed),HI(o_power),HI(o_rapid),HI(o_nova),HI(o_magnet),HI(o_crit)
+IF CARD
+    EQUB HI(o_orbs),HI(o_orbr),HI(o_orbd),HI(o_seeds),HI(o_tentd),HI(o_tentt),HI(o_tents),HI(o_storm),HI(o_stormd),HI(o_ward),HI(o_wardd),HI(o_restore)
+ENDIF
+.o_vigour EQUS "VIGOUR",0
+.o_speed EQUS "SPEED",0
+.o_power EQUS "SWORD DAMAGE",0
+.o_rapid EQUS "SWORD TEMPO",0
+.o_nova EQUS "SWORD REACH",0
+.o_magnet EQUS "SWORD COVERAGE",0
+.o_crit EQUS "SWORD CRIT",0
+ENDIF
+IF CARD
+.o_storm EQUS "STORM CALL",0
+.o_stormd EQUS "STORM DAMAGE",0
+.o_ward EQUS "HOLY WARD",0
+.o_wardd EQUS "HOLY DAMAGE",0
+.o_restore EQUS "RESTORE",0
+.o_orbs EQUS "ARCANE ORBS",0
+.o_orbr EQUS "ORB RADIUS",0
+.o_orbd EQUS "ORB DAMAGE",0
+.o_seeds EQUS "SEEDS OF DOOM",0
+.o_orb_more EQUS "EXTRA ORB",0
+.o_seed_rate EQUS "SEED RATE",0
+.o_storm_rate EQUS "STORM RATE",0
+.o_ward_rate EQUS "HOLY RATE",0
+.weapon_more_lo EQUB LO(o_orb_more),LO(o_seed_rate),LO(o_storm_rate),LO(o_ward_rate)
+.weapon_more_hi EQUB HI(o_orb_more),HI(o_seed_rate),HI(o_storm_rate),HI(o_ward_rate)
+.o_tentd EQUS "TENTACLE DAMAGE",0
+.o_tentt EQUS "TENTACLE LIFE",0
+.o_tents EQUS "TENTACLE REACH",0
+ENDIF
+IF CARD
+.roll_cards
+    JSR sync_weapon_cards
+    ; LUCK (UPGS) adds 2 per level to the rarity roll, saturating at 255.
+    LDA UPGS: ASL A: STA TMP1
+    LDX #0
+.rc_loop
+    STX MENUINDEX
+    JSR uirandom
+    CLC: ADC TMP1: BCC rc_luck
+    LDA #255
+.rc_luck
+    LDY #0
+    CMP #153: BCC rc_rank
+    INY: CMP #217: BCC rc_rank
+    INY: CMP #248: BCC rc_rank
+    INY
+.rc_rank
+    TYA: STA CARDRARITY,X
+    LDA OFFER1,X: TAX
+    LDA cardstep,X: STA TMP0
+    TYA: CLC: ADC TMP0: TAX
+    LDA cardbase,X
+.rc_store
+    LDX MENUINDEX: STA CARDVALUE,X
+    ; Gaining Seeds of Doom sets its base rate (a tentacle per 16 ticks), not a step.
+    LDA OFFER1,X: CMP #10: BEQ rc_seed
+    CMP #14: BEQ rc_storm
+    CMP #16: BNE rc_next
+    LDA #WARD_ID: BNE rc_base
+.rc_storm
+    LDA #STORM_ID: BNE rc_base
+.rc_seed
+    LDA #SEED_ID
+.rc_base
+    JSR weapon_slot: BCS rc_next
+    LDA #16: STA CARDVALUE,X
+.rc_next
+    INX: CPX #3: BNE rc_loop
+    RTS
+.raritylo EQUB LO(rc0),LO(rc1),LO(rc2),LO(rc3)
+.rarityhi EQUB HI(rc0),HI(rc1),HI(rc2),HI(rc3)
+.s_rerollkey EQUS KEY,"R",KEY,"EROLL",0
+.rc0 EQUS "COMMON",0
+.rc1 EQUS "UNCOMMON",0
+.rc2 EQUS "RARE",0
+.rc3 EQUS "EPIC",0
+; Small steps, many picks: tempo +2 of base32 swings/256 ticks is ~6%;
+; speed +1 of base16 eighths of a pixel is ~6%.
+; Indices share identical rarity-step rows, retaining every existing effect.
+.cardstep EQUB 0,4,4,8,8,12,16,12,20,16,8,16,24,4,8,4,8,4,28
+.cardbase
+EQUB 4,5,6,8, 1,1,2,2, 2,2,3,4, 1,1,1,1
+EQUB 1,1,1,2, 2,3,4,6, 2,3,4,5, 16,16,16,16
+INCLUDE "src/reach-table.inc"
+.s_deg EQUS " DEG",0
+; Coverage step k (10 degrees each) -> ARCHALF and the resident ARCLIM table.
+; Front cone below180: limit[f] = f*tan(45+5k). From190 the engine hits the
+; whole front half and limit[f] = f*tan(135-5k) bounds the uncovered back wedge.
+.arc_tables
+    TAY: LDA arc_half,Y: STA ARCHALF
+    CPY #9: BEQ arc_done
+    CPY #27: BCS arc_done
+    ; Integer cross values must land on the right side of the true edge:
+    ; floor the front-cone limit, ceiling the back-wedge limit.
+    STY TMP0
+    LDX #0
+    TYA: CLC: ADC #8
+    CPY #10: BCC arc_index
+    LDX #255
+    LDA #26: SEC: SBC TMP0
+.arc_index
+    TAY
+    STX TMP1: LDA #0: STA TMP2 ; 8.8 accumulator
+    LDX #0
+.arc_fill
+    LDA TMP2: STA ARCLIM,X
+    LDA TMP1: CLC: ADC tan_lo,Y: STA TMP1
+    LDA TMP2: ADC tan_hi,Y: BCC arc_store
+    LDA #255
+.arc_store
+    STA TMP2
+    INX: CPX #41: BNE arc_fill
+.arc_done
+    RTS
+.arc_half
+FOR k,0,27
+    EQUB 32+INT(k*32/9+0.5)
+NEXT
+.tan_lo ; tan(5..85 degrees) in 8.8 fixed point
+FOR i,0,16
+    EQUB LO(INT(TAN(RAD(5*(i+1)))*256+0.5))
+NEXT
+.tan_hi
+FOR i,0,16
+    EQUB HI(INT(TAN(RAD(5*(i+1)))*256+0.5))
+NEXT
+.statcap EQUB 248,32,32,64,40,27,12, 4,48,16,64,16,60,16,64,32,64,32
+ASSERT P%-statcap=RESTORE
+; Every weapon card has an owner id; unowned primaries alone may unlock it.
+.card_owner EQUB 0,0,0,0,0,0,0, ORB_ID,ORB_ID,ORB_ID, SEED_ID,SEED_ID,SEED_ID,SEED_ID, STORM_ID,STORM_ID,WARD_ID,WARD_ID
+ASSERT P%-card_owner=RESTORE
+.statlo EQUB LO(MAXHP),LO(MSPEED),LO(DMG),LO(FIREINT),LO(SWORDR),LO(SWORDARC),LO(SWORDCRIT)
+    EQUB 0,0,0,0,0,0,0,0,0,0,0 ; rebound to the owned or next empty slot on entry
+ASSERT P%-statlo=RESTORE
+; Orbit offsets: ORBTX/ORBTY = orb top-left for each 1/16 turn about the
+; player centre (126,120), so the module only copies positions per tick.
+.orbit_tables ; A = orbit radius in pixels
+    STA TMP2
+    LDX #15
+.orbit_angle
+    LDA orb_cos,X: JSR orb_scale
+    CLC: ADC #124: LSR A: LSR A: STA ORBTX,X
+    TXA: CLC: ADC #12: AND #15: TAY
+    LDA orb_cos,Y: JSR orb_scale
+    CLC: ADC #118: STA ORBTY,X
+    DEX: BPL orbit_angle
+    RTS
+.orb_scale ; A = signed Q7 factor -> A = round(factor * TMP2 / 128), signed
+    STA TMP0: BPL orb_scale_abs
+    EOR #255: CLC: ADC #1
+.orb_scale_abs
+    TAY: LDA #64: STA TMP1: LDA #0
+    CPY #0: BEQ orb_scale_done
+.orb_scale_add
+    PHA: LDA TMP1: CLC: ADC TMP2: STA TMP1: PLA: ADC #0
+    DEY: BNE orb_scale_add
+.orb_scale_done
+    ASL TMP1: ROL A
+    BIT TMP0: BPL orb_scale_ret
+    EOR #255: CLC: ADC #1
+.orb_scale_ret
+    RTS
+.orb_cos
+FOR i,0,15
+    EQUB (INT(127*COS(i*PI/8)+0.5)) AND &FF
+NEXT
+ENDIF
+INCLUDE "src/menu-audio.inc"
+MENU_GFX=gfxcall
+INCLUDE "src/menu-frame.inc"
+.end
+ASSERT end<=&2400
+IF CARD
+SAVE "build/NCARDS", ui_start, end
+ELSE
+SAVE "build/NIGHTUI", ui_start, end
+ENDIF

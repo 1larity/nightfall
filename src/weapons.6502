@@ -1,0 +1,49 @@
+; Shared resident weapon support; no weapon-specific tick code is boot-loaded.
+CPU 0
+INCLUDE "src/nfvars.inc"
+INCLUDE "build/engine-entry.inc"
+ORG MOD_WEAPONS
+.start
+.weapons_tick
+    LDA SLOTAID: BEQ slot_b
+    JSR SLOT_A_CODE
+.slot_b
+    LDA SLOTBID: BEQ done
+    JSR SLOT_B_CODE
+.done
+    RTS
+.end
+ASSERT start=OX+41 AND end<=OX+64
+SAVE "build/NWEAPON",start,end
+
+ORG WEAPON_HIT_HELPER
+.helper_start
+    STX WIDX: JSR weapon_hit: LDX WIDX: RTS
+ASSERT P%=ORB_STEP
+    EQUB 0,16,8,5,4
+.helper_end
+ASSERT helper_start=OY+41 AND helper_end<=OY+64
+SAVE "build/NWEAPX",helper_start,helper_end
+
+; NWEAPB: second resident piece above NF audio's &2BD0..&2BD5 clock.
+; Enemy X is in the box of WX/WY +- WRX units/WRY pixels: carry clear.
+ORG BOX_NEAR
+.box_start
+.box_near
+    LDA OX,X: SEC: SBC WX: BCS box_x
+    EOR #255: ADC #1
+.box_x
+    CMP WRX: BEQ box_y
+    BCS box_out
+.box_y
+    LDA OY,X: SEC: SBC WY: BCS box_y_abs
+    EOR #255: ADC #1
+.box_y_abs
+    CMP WRY: BEQ box_in
+.box_out
+    RTS
+.box_in
+    CLC: RTS
+.box_end
+ASSERT box_end<=&2C00
+SAVE "build/NWEAPB",box_start,box_end

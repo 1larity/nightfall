@@ -1,0 +1,94 @@
+; PWYRM: the Wyrm, the second shrine's boss (a page NARENA loads to KIND_HOOK;
+; see arena-map.inc). Its head (slot1, the boss, the only part that takes
+; damage) weaves a figure of eight over the arena, its X at half the rate of
+; its Y; seven body segments (kind16, slots 4..10) follow the head's path,
+; and touching any of them costs BOSSDMG. Phase 1: a step every other tick;
+; phase 2: every tick; phase 3: every tick, the figure halved and centred on
+; the player, coiling round them.
+CPU 0
+INCLUDE "src/nfvars.inc"
+INCLUDE "src/arena-map.inc"
+INCLUDE "build/arena-entry.inc"
+FRAME=&2E83
+HP_MAX=100: SEGMENTS=7: GAP=3 ; path steps between segments
+ORG KIND_HOOK
+.start
+    JMP wyrm_tick ; BOSS_TICK
+    RTS: NOP: NOP ; BOSS_DRAW: its parts are world actors
+    EQUB HP_MAX,HP_MAX*2/3,HP_MAX/3 ; BOSS_HP: life, phases 2 and 3
+    EQUS "WYRM",0,0,0,0,0 ; BOSS_NAME
+ASSERT P%=BOSS_NAME+9
+
+.wyrm_tick
+    LDA ARENA_WON: BEQ wyrm_alive
+    RTS
+.wyrm_alive
+    LDA wyrm_ready: BNE wyrm_steps
+    ; First tick: the body, coiled on the head; its art the rock (world kind7).
+    INC wyrm_ready
+    LDA #7: STA KIND_XLAT+BOSS_OWNED
+    LDX #10
+.wyrm_body
+    LDA #BOSS_OWNED: STA KIND,X: LDA #0: STA OYH,X
+    DEX: CPX #4: BCS wyrm_body
+    LDX #31
+.wyrm_history
+    LDA OX+1: STA wyrm_hx,X: LDA OY+1: STA wyrm_hy,X: DEX: BPL wyrm_history
+.wyrm_steps
+    ; Phase 1 steps on even ticks only.
+    LDA ARENA_PHASE: BNE wyrm_step
+    LDA FRAME: LSR A: BCS wyrm_place
+.wyrm_step
+    ; The head's next point: X from the slow index (wyrm_t/2), Y the fast.
+    INC wyrm_t
+    LDA wyrm_t: LSR A: AND #63: TAY: LDA wyrm_xs,Y: STA wyrm_x
+    LDA wyrm_t: AND #63: TAY: LDA wyrm_ys,Y: STA wyrm_y
+    LDA ARENA_PHASE: CMP #2: BNE wyrm_point
+    ; Phase 3: half the figure, round the player.
+    LDA wyrm_x: SEC: SBC #28: CMP #&80: ROR A: CLC: ADC OX
+    CMP #LEFT: BCS wyrm_x_left
+    LDA #LEFT
+.wyrm_x_left
+    CMP #RIGHT-2: BCC wyrm_x_right
+    LDA #RIGHT-2
+.wyrm_x_right
+    STA wyrm_x
+    LDA wyrm_y: SEC: SBC #116: CMP #&80: ROR A: CLC: ADC OY
+    CMP #TOP: BCS wyrm_y_top
+    LDA #TOP
+.wyrm_y_top
+    CMP #BOTTOM: BCC wyrm_y_bottom
+    LDA #BOTTOM
+.wyrm_y_bottom
+    STA wyrm_y
+.wyrm_point
+    LDA wyrm_h: CLC: ADC #1: AND #31: STA wyrm_h: TAX
+    LDA wyrm_x: STA wyrm_hx,X: LDA wyrm_y: STA wyrm_hy,X
+.wyrm_place
+    ; The head where the path is (the engine's chase is undone), then each
+    ; segment GAP points further back, and its touch.
+    LDX wyrm_h: LDA wyrm_hx,X: STA OX+1: LDA wyrm_hy,X: STA OY+1
+    LDY #4
+.wyrm_segment
+    TXA: SEC: SBC #GAP: AND #31: TAX
+    LDA wyrm_hx,X: STA OX,Y: LDA wyrm_hy,X: CLC: ADC #5: STA OY,Y
+    LDA KIND,Y: CMP #BOSS_OWNED: BNE wyrm_next ; (cleared on the way out)
+    LDA OX,Y: SEC: SBC OX: CLC: ADC #2: CMP #5: BCS wyrm_next
+    LDA OY,Y: SEC: SBC OY: CLC: ADC #6: CMP #22: BCS wyrm_next
+    STX wyrm_i: STY wyrm_j
+    LDA BOSSDMG: JSR ARENA_HURT
+    LDX wyrm_i: LDY wyrm_j
+.wyrm_next
+    INY: CPY #4+SEGMENTS: BNE wyrm_segment
+.wyrm_done
+    RTS
+
+.wyrm_ready EQUB 0: .wyrm_t EQUB 0: .wyrm_h EQUB 0
+.wyrm_x EQUB 0: .wyrm_y EQUB 0: .wyrm_i EQUB 0: .wyrm_j EQUB 0
+; One turn of the figure: X (4-pixel units) and Y (pixels), 64 points each.
+.wyrm_xs EQUB 28,30,32,34,36,38,40,42,44,45,46,47,48,49,50,50,50,50,50,49,48,47,46,45,44,42,40,38,36,34,32,30,28,26,24,22,20,18,16,14,12,11,10,9,8,7,6,6,6,6,6,7,8,9,10,11,12,14,16,18,20,22,24,26
+.wyrm_ys EQUB 116,124,132,140,148,156,163,169,175,181,186,190,194,196,198,200,200,200,198,196,194,190,186,181,175,169,163,156,148,140,132,124,116,108,100,92,84,76,69,63,57,51,46,42,38,36,34,32,32,32,34,36,38,42,46,51,57,63,69,76,84,92,100,108
+.wyrm_hx SKIP 32: .wyrm_hy SKIP 32 ; the head's last 32 points
+.end
+ASSERT end<=KIND_HOOK_END
+SAVE "build/PWYRM",start,end

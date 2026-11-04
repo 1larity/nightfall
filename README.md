@@ -60,6 +60,10 @@ BeebEm and b2 are the Windows builds, tested under Wine. Nothing has run on real
 
 Beta 1 is the Barbarian and the first world. Next comes the gem store, where you buy new character archetypes, then Worlds 2 to 4, for four environments in all, each with new enemies and bosses.
 
+## Source
+
+The 6502 assembly for this build is in [src](src), with a guide to how it fits together and what it needs to assemble in [src/README.md](src/README.md).
+
 ## Licences
 
-Copyright (c) 2026 Richard Beech. `nightfall.ssd` and `NFASSETS.rom` are CC BY-NC-SA 4.0 ([LICENSE](LICENSE)). `EGFX.rom` and `EGFX2.rom` are MIT ([LICENSE-EGFX](LICENSE-EGFX)). `EAUDIO.rom` is MIT ([LICENSE-EAUDIO](LICENSE-EAUDIO)).
+Copyright (c) 2026 Richard Beech. `nightfall.ssd` and `NFASSETS.rom` are CC BY-NC-SA 4.0 ([LICENSE](LICENSE)). `EGFX.rom` and `EGFX2.rom` are MIT ([LICENSE-EGFX](LICENSE-EGFX)). `EAUDIO.rom` and `src/eaudio.6502` are MIT ([LICENSE-EAUDIO](LICENSE-EAUDIO)). The rest of the source in `src` and `build` is CC BY-NC-SA 4.0.

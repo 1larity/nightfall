@@ -1,0 +1,982 @@
+; Nightfall shared NMOS6502 client: host or Acorn 6502 second processor.
+CPU 0
+ORG &1900
+OSBYTE=&FFF4: OSWRCH=&FFEE
+DIR=&2DC0
+FRAME=&2E83
+IFRAME=&2E85: SLOT=&2E89
+IDX=&2E8A: SAVEX=&2E8B: COUNT=&2E8C
+CAMX=&2E90: CAMY=&2E91: CAMYHI=&2E92
+BOSSLO=&2E97: BOSSHI=&2E98: BOSSN=&2E99
+DEAD=&2EAA
+SHIFTX=&2E95: SHIFTY=&2E96
+DELTA=&2EB6: CATCHUP=&2EB7
+PACKETCOUNT=&2EC3: PACKETPOS=&2EC4: ASSETINDEX=&2EC5
+INCLUDE "src/nfvars.inc"
+IF ARENA
+INCLUDE "src/arena-map.inc"
+ENDIF
+INCLUDE "build/sword-bank.inc"
+INCLUDE "build/sprite-map.inc"
+ASSERT SPR_SWORD=0
+IF ARENA
+INCLUDE "build/night-entry.inc" ; NIGHT_WEAPON_HIT from the NIGHT build
+ENDIF
+
+IF ARENA
+; NARENA: this engine with ARENA=1 (see arena-engine.inc), an overlay whose
+; only routed entry is 12 (a shrine's arena).
+.start
+EQUS "EGOV": EQUB 2,16: EQUW end-start
+; Entries 0..11 are never routed here: the guardian's bar request in them.
+.a_guard_bar EQUB 64,8: EQUS "EG": EQUB 2,27,0,0
+EQUW 48: EQUB 240: EQUW 160: EQUB &83,1,0: EQUW 0,0: EQUB 0,4 ; max: the page's
+EQUS "GUARDIAN",0
+SKIP &1908+12*3-P%
+JMP arena_entry
+; Up to weapon_hit: small tables.
+.a_phase_tier EQUB 4,5 ; faster chase in phases 2 and 3
+.a_phase_texts EQUB a_phase2-a_won_text,a_phase3-a_won_text
+.a_phase_x EQUB 96,88
+; Next saved slot down: 40..33, then 10..0 (Y the save index; N at the end).
+.a_slot_next
+    DEX: CPX #32: BNE a_slot_y
+    LDX #10
+.a_slot_y
+    DEY: RTS
+SKIP NIGHT_WEAPON_HIT-P% ; weapon_hit where NIGHT has it: shared slot hit helper calls it
+ELSE
+.start
+    CLD
+    ; NFBOOT has set Escape to ASCII27 and loaded the resident NFLOAD. The
+    ; asset boot overlay sets MAINVEC (and the palette); the run reset STATE.
+    LDA #9: JSR &2F00
+    LDA #1: JSR &2F00
+    JSR reset
+    JMP main
+; (Here, NIGHT-only, so NARENA's longer header still ends before weapon_hit.)
+.boss_timer
+    LDA BOSSLO: BNE boss_dec_lo
+    LDA BOSSHI: BEQ boss_page
+    DEC BOSSHI
+.boss_dec_lo
+    DEC BOSSLO: RTS
+.boss_page
+    LDA #0: STA SPAWNSLOT ; entry13: spawn, not open a chest
+    LDA #13: JMP &2F00
+boss_update = boss_timer
+.game_over
+    ; DEAD negative: killed in an arena, whose frame stays up (no world).
+    LDA DEAD: BMI game_over_bank
+    BNE dead_wait
+    JSR render
+.game_over_bank
+    LDA #1: STA DEAD
+    ; NRESET entry3 banks the run's gold, persists the profile and enters
+    ; the death state.
+    LDA #3: JMP &2F00
+.dead_wait
+    LDA #19: JSR OSBYTE: RTS
+ENDIF
+; Weapons module hit: A = effect half-size in pixels, X = object slot,
+; Y = object half-size (2 for 4x4, 8 for 16x16), SWINGDMG = damage. The box
+; adds the 12x16 enemy half-size around the object's centre.
+.weapon_hit
+    PHA: CLC: ADC #6: LSR A: LSR A: STA WRX
+    PLA: CLC: ADC #8: STA WRY
+    CPY #8: LDA OX,X: SBC #0: STA WX ; 4x4: one unit left; 16x16: aligned
+    TYA: CLC: ADC OY,X: SEC: SBC #8: STA WY
+    LDA #LO(BOX_NEAR): STA NEARVEC: LDA #HI(BOX_NEAR): STA NEARVEC+1
+    JMP damage_enemies
+IF ARENA
+ASSERT weapon_hit=NIGHT_WEAPON_HIT
+ENDIF
+IF ARENA=0
+.main
+    JSR &2F03 ; resident checkpoint, unambiguous across overlay swaps
+    LDA STATE: BNE nm
+    JMP menu_run
+.nm  CMP #2: BNE n1
+    JMP levelup_run
+.n1  CMP #3: BNE n2
+    JMP dead_frame
+.n2  CMP #4: BNE n5
+    JMP jt_upg
+.n5  CMP #5: BNE n6
+    JMP pause_run
+.n6  CMP #6: BNE play_entry
+    ; STATE 6: a shrine's arena (modal NARENA, entry12), then the frozen world.
+    ; Won (alive): entry13 again with SPAWNSLOT still the shrine's slot, now
+    ; empty, where the final shrine ends the run.
+    LDA #12: JSR &2F00
+    LDA HP: BEQ arena_left
+    LDA #13: JSR &2F00
+.arena_left
+    JMP resume_play
+.n3
+.play_entry
+    ; STATE 1: playing
+    LDA #129: LDX #0: LDY #0: JSR OSBYTE
+    BCS play_no_command
+    CPX #80: BEQ t_p
+    CPX #27: BEQ t_p
+    CPX #ASC("M"): BEQ t_m
+    BNE play_no_command
+.t_p
+    LDA #5: STA STATE
+    JMP (MAINVEC)
+.t_m
+    ; Modal world map (NFCOMB entry4); resume repaints and rebases the clock.
+    LDA #4: JSR &2F00
+    JMP resume_play
+.play_no_command
+    LDA HP: BNE alive
+    JSR game_over
+    JMP (MAINVEC)
+.alive
+    JSR check_level
+    LDA STATE
+    CMP #1: BEQ alive_running
+    JMP main
+.alive_running
+    JSR read_clock
+    LDA CLOCK: SEC: SBC STAMP: STA DELTA
+    CMP #10: BCS have_tick
+    LDA #19: JSR OSBYTE: JMP main
+.have_tick
+    ; At most four fixed100ms ticks per rendered frame; discard excessive
+    ; pause debt explicitly rather than spiral forever after slow disk/UI.
+    LDA DELTA: CMP #50: BCC normal_debt
+    LDA CLOCK: SEC: SBC #40: STA STAMP
+.normal_debt
+    LDA #4: STA CATCHUP
+    JSR scan_keys ; once per frame, shared by catch-up ticks
+.tick_loop
+    LDA STAMP: CLC: ADC #10: STA STAMP
+    JSR simulation_tick
+    LDA HP: BEQ ticks_done
+    DEC CATCHUP: BEQ ticks_done
+    LDA CLOCK: SEC: SBC STAMP: CMP #10: BCS tick_loop
+.ticks_done
+    LDA HP: BEQ lethal_tick
+    JSR render
+    JMP (MAINVEC)
+.lethal_tick
+    JSR game_over
+    JMP (MAINVEC)
+.reset
+    LDA #11: JMP &2F00
+.simulation_tick
+    INC FRAME
+    INC RUNTICKS: BNE tick_time_ok
+    INC RUNTICKSH
+.tick_time_ok
+    ; RUNTICKS is the authoritative run clock; chapter transitions remain deferred.
+    LDA IFRAME: BEQ no_invulnerability
+    DEC IFRAME
+.no_invulnerability
+    JSR player_update: JSR ENEMY_SPAWN: JSR enemies_update
+    JSR fire_update: JSR MOD_WEAPONS: JSR gems_update
+    JSR boss_timer
+    RTS
+.read_clock
+    LDA #1: LDX #LO(CLOCK): LDY #HI(CLOCK): JMP &FFF1
+ENDIF
+.key
+    LDA #129: LDY #255: JSR OSBYTE: CPX #255: RTS
+; Negative INKEY sets carry when pressed; four ROLs leave right..up in bits3..0.
+.scan_keys
+    LDY #3
+.scan_key
+    STY TMP2: LDX move_keys,Y: JSR key
+    ROL KEYS
+    LDY TMP2: DEY: BPL scan_key
+    RTS
+.move_keys EQUB &DE,&AE,&BE,&CD
+IF ARENA=0
+.player_update
+    ; Sub-pixel steps: MSPEED is eighths of a pixel per tick on both axes.
+    ; TMP0 = whole pixels this tick, horizontally too (EGFX pixel mode).
+    LDA VACC: CLC: ADC MSPEED: TAY: AND #7: STA VACC
+    TYA: LSR A: LSR A: LSR A: STA TMP0
+    ; KEYS bits from scan_keys: 1 up, 2 down, 4 left, 8 right. Move both
+    ; axes; sword retains cardinal facing.
+    LDA KEYS: AND #3: CMP #1: BNE manual_down
+    JSR move_up
+.manual_down
+    LDA KEYS: AND #3: CMP #2: BNE manual_horizontal
+    JSR move_down
+.manual_horizontal
+    LDA TMP0: BEQ manual_done
+    LDA KEYS: AND #12: CMP #4: BEQ move_left
+    CMP #8: BNE manual_done
+    JMP move_right
+.manual_done
+    RTS
+.move_up
+    LDA #3: STA FACING
+    LDA CAMY: SEC: SBC TMP0: STA CAMY
+    LDA CAMYHI: SBC #0: STA CAMYHI
+    BCS up_shift
+    ; Wrapped past the top of the torus: add the 1024-pixel world height.
+    LDA CAMYHI: CLC: ADC #4: STA CAMYHI
+.up_shift
+    LDA TMP0: STA SHIFTY: LDA #0: STA SHIFTX
+    JMP scroll_objects
+.move_down
+    LDA #1: STA FACING
+    LDA CAMY: CLC: ADC TMP0: STA CAMY
+    LDA CAMYHI: ADC #0: STA CAMYHI
+    CMP #4: BCC down_shift
+    ; Wrapped past the bottom: subtract the world height.
+    LDA CAMYHI: SEC: SBC #4: STA CAMYHI
+.down_shift
+    LDA #0: SEC: SBC TMP0: STA SHIFTY: LDA #0: STA SHIFTX
+    JMP scroll_objects
+.move_left
+    ; The camera moves by whole pixels (CAMXF, at most 4 a tick); objects
+    ; (in 4px units) shift when it crosses a byte.
+    LDA #2: STA FACING
+    LDA CAMXF: SEC: SBC TMP0: BCS move_fine
+    ADC #4: STA CAMXF
+    DEC CAMX
+    LDA #1: STA SHIFTX: LDA #0: STA SHIFTY
+    JMP scroll_objects
+.move_right
+    LDA #0: STA FACING
+    LDA CAMXF: CLC: ADC TMP0: CMP #4: BCC move_fine
+    SBC #4: STA CAMXF
+    INC CAMX
+    LDA #&FF: STA SHIFTX: LDA #0: STA SHIFTY
+    JMP scroll_objects
+.move_fine
+    STA CAMXF
+    RTS
+.scroll_objects
+    ; Torus scrolling: X wraps free (world = 256 4px units); Y is 10 bits,
+    ; OYH:OY mod 1024, so objects keep world positions off screen.
+    LDX #1
+.scroll_loop
+    LDA KIND,X: BEQ scroll_next
+    LDA OX,X: CLC: ADC SHIFTX: STA OX,X
+    LDA SHIFTY: BEQ scroll_next
+    CLC: ADC OY,X: STA OY,X
+    LDA #0: BIT SHIFTY: BPL scroll_y_high
+    LDA #&FF ; sign-extend a negative shift
+.scroll_y_high
+    ADC OYH,X: AND #3: STA OYH,X
+.scroll_next
+    INX: CPX #41: BNE scroll_loop
+.player_done
+    RTS
+ENDIF
+; World position is camera origin plus fixed player screen position.
+; Camera X uses 4-pixel units mod 256; Y uses 16-bit pixels mod 1024.
+; The 64x64 map is a torus: leaving one edge re-enters at the opposite edge.
+IF ARENA=0
+.award_gold
+    ; GREEDV/256 of a gold per kill (a base share plus Greed's) in GOLDACC.
+    LDA GOLDACC: CLC: ADC GREEDV: STA GOLDACC
+    LDA #0: ADC RUNGOLD: STA RUNGOLD
+    LDA RUNGOLDH: ADC #0: STA RUNGOLDH
+    RTS
+ENDIF
+.random
+    LDA RAND: ASL A: BCC random_ok
+    EOR #&1D
+.random_ok
+    STA RAND: RTS
+.enemies_update
+    LDA OX: STA CX: LDA OY: STA CY
+    LDX #1
+IF ARENA
+; Everything in an arena is a chasing enemy on screen, but the boss page's
+; own kinds (BOSS_OWNED up), which the page moves.
+.enemy_loop
+    LDA KIND,X: BEQ enemy_wait
+    CMP #BOSS_OWNED: BCC enemy_visible
+.enemy_wait
+    JMP next_enemy
+ELSE
+.enemy_loop
+    LDA KIND,X: BEQ enemy_wait
+    CMP #SHRINE: BCC enemy_active
+IF ARENA
+    JMP next_enemy ; no fixed objects in an arena
+ELSE
+    JMP chest_update
+ENDIF
+.enemy_active
+    TAY: LDA KIND_FLAGS,Y: AND #4: BEQ enemy_engine
+    JSR KIND_HOOK: BCC enemy_engine
+    JMP enemy_contact
+.enemy_engine
+    LDA OYH,X: BNE enemy_away
+    LDA OX,X: CMP #62: BCS enemy_away
+    LDA OY,X: CMP #225: BCC enemy_visible
+.enemy_away
+    ; Off screen: bosses wait at their world position, others despawn.
+    LDA KIND,X: CMP #9: BEQ enemy_wait
+    LDA #0: STA KIND,X
+.enemy_wait
+    JMP next_enemy
+ENDIF
+.enemy_visible
+    STX IDX
+IF ARENA=0
+    ; The enemy types (kinds 2, 3) chase by this tick's TYPE_MOVEX units and
+    ; TYPE_MOVEY pixels (the enemy core sets them from their speeds).
+    LDY KIND,X: CPY #4: BCS tier_step
+    LDA TYPE_MOVEX-2,Y: BEQ type_y
+    LDA OX,X: SEC: SBC OX: BEQ type_y
+    ASL A: LDA #&FF: BCC type_x_add ; the short way round the X torus
+    LDA #1
+.type_x_add
+    CLC: ADC OX,X: STA OX,X
+.type_y
+    LDA TYPE_MOVEY-2,Y: BEQ enemy_contact
+    STA TYPE_COUNT
+.type_y_step
+    LDA OY,X: CMP OY: BEQ enemy_contact
+    LDA #&FF: BCS type_y_add
+    LDA #1
+.type_y_add
+    CLC: ADC OY,X: STA OY,X
+    DEC TYPE_COUNT: BNE type_y_step
+    BEQ enemy_contact
+.tier_step
+ENDIF
+    LDY TIER
+    LDA FRAME: EOR TIER: AND TIER_STEP,Y
+    LDY KIND,X: AND KIND_FLAGS,Y
+    BNE enemy_y
+.enemy_x
+    ; Signed chase: shortest way around the 256-unit X torus.
+    LDA OX,X: SEC: SBC OX: BEQ enemy_y
+    BPL enemy_dec_x
+    INC OX,X: JMP enemy_y
+.enemy_dec_x
+    DEC OX,X
+.enemy_y
+    LDA OY,X: CMP OY: BEQ enemy_contact
+    BCC enemy_down
+    DEC OY,X: JMP enemy_contact
+.enemy_down
+    INC OY,X
+.enemy_contact
+    LDA IFRAME: BNE next_enemy
+    JSR near: BCS next_enemy
+    LDA HP: BEQ next_enemy
+    ; Ordinary enemies are consumed without rewards. A living boss stays:
+    ; contact must not delete it and bypass the chest-on-death path.
+    ; A boss hits for BOSSDMG (a quarter of max HP, set at its spawn).
+    LDY #1
+    LDA KIND,X: CMP #9: BNE contact_consume
+    LDY BOSSDMG: BNE contact_damage
+.contact_consume
+    LDA #0: STA KIND,X
+.contact_damage
+    DEC HP: BEQ enemy_iframe
+    DEY: BNE contact_damage
+.enemy_iframe
+    LDA IFRAMEV: STA IFRAME
+    JMP next_enemy
+IF ARENA=0
+; Chests retain the defeated boss slot: drops never depend on pickup capacity.
+.chest_update
+    CMP #CHEST_OPEN: BNE chest_closed ; shrine or closed chest: touch
+    DEC LIFE,X: BNE next_enemy
+    LDA #0: STA KIND,X
+    BEQ next_enemy
+.chest_closed
+    LDA OYH,X: BNE next_enemy
+    ; Exact 12x16 player / 16x16 chest overlap (X units are four pixels).
+    LDA CX: CLC: ADC #2: SEC: SBC OX,X: CMP #6: BCS next_enemy
+    LDA CY: CLC: ADC #15: SEC: SBC OY,X: CMP #31: BCS next_enemy
+    STX SPAWNSLOT
+    LDA #13: JSR &2F00 ; cold reward logic; no disk work while waiting/counting
+    LDX SPAWNSLOT
+ENDIF
+.next_enemy
+    INX: CPX #11: BCC enemy_cont
+    RTS
+.enemy_cont
+    JMP enemy_loop
+; Carry clear when object X overlaps target CX/CY.
+.near
+    LDA OX,X: SEC: SBC CX: BCS near_x_positive
+    EOR #&FF: ADC #1
+.near_x_positive
+    CMP #3: BCS not_near
+    LDA OY,X: SEC: SBC CY: BCS near_y_positive
+    EOR #&FF: ADC #1
+.near_y_positive
+    CMP #12
+.not_near
+    RTS
+ .fire_update
+    ; Keep the final flash pending until a frame actually draws it. Four
+    ; catch-up ticks can otherwise consume the entire three-tick animation.
+    LDA SWINGVIS: CMP #2: BCC sword_timer
+    DEC SWINGVIS
+.sword_timer
+    ; FIREINT is tempo: swings per 256 ticks (32 = every eighth tick). The
+    ; accumulator keeps its remainder, so small tempo steps stay exact.
+    LDA FIRECNT: CLC: ADC FIREINT: STA FIRECNT
+    BCS sword_begin
+    RTS
+.sword_begin
+    LDA #3: STA SWINGVIS
+    LDA FACING: STA SWINGDIR
+    LDA DMG: STA SWINGDMG
+    JSR random: JSR SWING_COLOUR_HELPER
+.sword_damage_ready
+    LDA #LO(sword_near): STA NEARVEC: LDA #HI(sword_near): STA NEARVEC+1
+; Apply SWINGDMG to every enemy whose NEARVEC test clears carry (X = slot).
+; Shared by the sword and the weapons module, so kills reward identically.
+.damage_enemies
+    LDX #1
+.sword_loop
+    STX SLOT
+    LDA KIND,X: BEQ sword_next
+    CMP #SHRINE: BCS sword_next
+    LDA OYH,X: BNE sword_next
+    JSR near_test: BCS sword_next
+    LDA LIFE,X: SEC: SBC SWINGDMG
+    BCC sword_kill
+    BEQ sword_kill
+    STA LIFE,X
+.sword_next
+    LDX SLOT: INX: CPX #11: BCC sword_loop
+    RTS
+.sword_kill
+    JSR kill_enemy
+    JMP sword_next
+.near_test
+    JMP (NEARVEC)
+; The periodic sweep is a single damage event. Visual persistence never
+; repeats damage. Cone uses pixel-normalised X (MODE1 actor units are 4px).
+ .sword_near
+    ; Pixel distance, bounded before table lookup; true circular reach.
+    LDA OX,X: SEC: SBC OX: STA SX
+    BPL sword_x_abs
+    EOR #255: CLC: ADC #1
+.sword_x_abs
+    CMP #11: BCC sword_x_ok
+    JMP sword_miss
+.sword_x_ok
+    ASL A: ASL A: STA SCROSS
+    LDA OY,X: SEC: SBC OY: STA SY
+    BPL sword_y_abs
+    EOR #255: CLC: ADC #1
+.sword_y_abs
+    CMP SWORDR: BEQ sword_y_ok
+    BCC sword_y_ok
+    JMP sword_miss
+.sword_y_ok
+    ; Within the circle when |dx| <= REACHLIM[|dy|] = floor(sqrt(R*R-dy*dy)).
+    TAY: LDA REACHLIM,Y: CMP SCROSS: BCS sword_angle
+    JMP sword_miss
+.sword_angle
+    LDA SWORDARC: CMP #27: BCS sword_hit
+    LDA SX: ASL A: ASL A: STA SX
+    LDA SWINGDIR: LSR A: BCS sword_vertical
+    LDA SX: STA SFORWARD: LDA SY: STA SCROSS
+    JMP sword_orient
+.sword_vertical
+    LDA SY: STA SFORWARD: LDA SX: STA SCROSS
+.sword_orient
+    LDA SWINGDIR: AND #2: BEQ sword_oriented
+    LDA SFORWARD: EOR #255: CLC: ADC #1: STA SFORWARD
+.sword_oriented
+    LDA SCROSS: BPL sword_cross_abs
+    EOR #255: CLC: ADC #1
+.sword_cross_abs
+    STA SCROSS
+    ; Coverage 90+10*SWORDARC degrees. Below180 the front cone hits when
+    ; |cross| <= ARCLIM[forward]; from190 the whole front half hits and the
+    ; back hits when |cross| >= ARCLIM[-forward] (outside the uncovered wedge).
+    LDA SFORWARD: BMI sword_back
+    LDA SWORDARC: CMP #9: BCS sword_hit
+    LDY SFORWARD: LDA ARCLIM,Y: CMP SCROSS: BCS sword_hit
+    BCC sword_miss
+.sword_back
+    LDA SWORDARC: CMP #10: BCC sword_miss
+    LDA SFORWARD: EOR #255: CLC: ADC #1: TAY
+    LDA SCROSS: CMP ARCLIM,Y: BCC sword_miss
+.sword_hit
+    LDX SLOT: CLC: RTS
+.sword_miss
+    LDX SLOT: SEC: RTS
+IF ARENA
+.kill_enemy
+    INC KILLS: BNE kills_counted: INC KILLSH
+.kills_counted
+    LDA #0: STA KIND,X
+    CPX #1: BNE kill_add ; slot1 is the guardian; others are its adds
+    LDA #1: STA a_won
+.kill_add
+    RTS
+ELSE
+.kill_enemy
+    INC KILLS: BNE kills_counted: INC KILLSH
+.kills_counted
+    LDY KIND,X ; (its heal chance, below)
+    LDA #0: STA KIND,X
+    LDA OX,X: STA CX: LDA OY,X: STA CY
+    LDA DIR,X: BEQ kill_normal
+    BMI kill_elite ; an elite leaves nothing
+    ; Preserve tier in DIR; reward only when the player touches this chest.
+    LDA #CHEST_CLOSED: STA KIND,X
+.kill_elite
+    RTS
+.kill_normal
+    ; An enemy type (kind 2 or 3): gold, its gem, then a heal at its type's
+    ; TYPE_DROP chance in 256, else a magnet one time in 32.
+    LDA TYPE_DROP-2,Y: PHA
+    JSR award_gold
+    LDA #1: JSR spawn_gem
+    PLA: STA TMP0
+    JSR random: CMP TMP0: LDA #6: BCC kill_drop
+    JSR random: AND #31: BNE kill_done
+    LDA #7
+.kill_drop
+    JMP spawn_powerup
+.kill_done
+    RTS
+.spawn_powerup        ; A = kind 6 heal / 7 magnet, at CX/CY
+    PHA
+    LDX #33
+.sp_find
+    LDA KIND,X: BEQ sp_here
+    INX: CPX #41: BNE sp_find
+    PLA: RTS
+.sp_here
+    PLA: STA KIND,X: JSR place_at_c
+    STA LIFE,X ; A = 0
+    RTS
+; Object X takes CX/CY (a dying enemy's position, always on screen).
+.place_at_c
+    LDA CX: STA OX,X: LDA CY: STA OY,X
+    LDA #0: STA OYH,X
+    RTS
+.spawn_gem            ; A = exp value, dropped at CX/CY
+    PHA
+    LDX #33
+.find_gem
+    LDA KIND,X: BEQ gem_here
+    INX: CPX #41: BNE find_gem
+    ; Pool full: coalesce the drop into the first existing gem.
+    PLA: STA TMP1
+    LDX #33
+.find_merge_gem
+    LDA KIND,X: CMP #5: BEQ gem_merge
+    INX: CPX #41: BNE find_merge_gem
+    RTS
+.gem_merge
+    LDA TMP1: CLC: ADC LIFE,X: BCS gem_value_cap
+    STA LIFE,X: RTS
+.gem_value_cap
+    LDA #255: STA LIFE,X: RTS
+.gem_here
+    LDA #5: STA KIND,X
+    JSR place_at_c
+    PLA: STA LIFE,X
+    RTS
+.gems_update
+    LDA OX: STA CX: LDA OY: STA CY
+    ; Exp far from the player coalesces into single points.
+    LDX #33
+    STX TMP1
+.gm_far_loop
+    LDX TMP1: CPX #41: BEQ gm_pickup
+    LDA KIND,X: CMP #5: BNE gm_far_next
+    JSR gem_far: BCC gm_far_next
+    STX IDX
+    INC TMP1
+.gm_absorb_loop
+    LDX TMP1: CPX #41: BEQ gm_pickup
+    LDA KIND,X: CMP #5: BNE gm_absorb_next
+    JSR gem_far: BCC gm_absorb_next
+    TXA: PHA
+    LDA LIFE,X: PHA
+    LDA #0: STA KIND,X
+    LDX IDX: PLA: CLC: ADC LIFE,X: BCS gm_absorb_cap
+    STA LIFE,X
+    PLA: TAX
+    JMP gm_absorb_next
+.gm_absorb_cap
+    LDA #255: STA LIFE,X
+    PLA: TAX
+.gm_absorb_next
+    INC TMP1: BNE gm_absorb_loop
+.gm_far_next
+    INC TMP1: JMP gm_far_loop
+.gm_pickup
+    LDX #33
+.gem_loop
+    LDA KIND,X: BEQ gem_skip
+    JSR gm_near: BCS gem_skip
+    LDA KIND,X: CMP #6: BEQ pick_heal
+    CMP #7: BEQ pick_magnet
+    LDA LIFE,X: CLC: ADC XP: BCS gem_xp_cap
+    STA XP: JMP gem_take
+.gem_skip
+    JMP gem_next
+.gem_xp_cap
+    LDA #255: STA XP: JMP gem_take
+.pick_heal
+    ; A quarter of max HP, up to the max.
+    LDA MAXHP: LSR A: LSR A: CLC: ADC HP: BCS pick_heal_full
+    CMP MAXHP: BCC pick_heal_store
+.pick_heal_full
+    LDA MAXHP
+.pick_heal_store
+    STA HP: JMP gem_take
+.pick_magnet
+    STX IDX
+    LDX #33
+.pm_loop
+    LDA KIND,X: CMP #5: BNE pm_next
+    LDA LIFE,X: CLC: ADC XP: BCS pm_capped
+    STA XP
+    LDA #0: STA KIND,X
+.pm_next
+    INX: CPX #41: BNE pm_loop
+    LDX IDX: JMP gem_take
+.pm_capped
+    LDA #255: STA XP
+    LDX #33
+.pm_clear
+    LDA KIND,X: CMP #5: BNE pm_clear_next
+    LDA #0: STA KIND,X
+.pm_clear_next
+    INX: CPX #41: BNE pm_clear
+    LDX IDX
+.gem_take
+    LDA #0: STA KIND,X
+.gem_next
+    INX: CPX #41: BCC gem_again
+    RTS
+.gem_again
+    JMP gem_loop
+; True when gem X lies far from CX/CY (player): beyond 25 X units or 72 px,
+; or outside the on-screen world-Y band.
+.gem_far
+    LDA OYH,X: CMP #1: BCS gem_far_yes
+    LDA OX,X: SEC: SBC CX: BCS gem_far_x
+    EOR #255: ADC #1
+.gem_far_x
+    CMP #25: BCS gem_far_yes
+    LDA OY,X: SEC: SBC CY: BCS gem_far_y
+    EOR #255: ADC #1
+.gem_far_y
+    CMP #73
+.gem_far_yes
+    RTS
+; Gem pickup with magnet-upgrade radius.
+.gm_near
+    LDA OYH,X: CMP #1: BCS gm_not_near
+    LDA OX,X: SEC: SBC CX: BCS gm_x_positive
+    EOR #&FF: CLC: ADC #1
+.gm_x_positive
+    CMP MAGRX: BCS gm_not_near
+    LDA OY,X: SEC: SBC CY: BCS gm_y_positive
+    EOR #&FF: CLC: ADC #1
+.gm_y_positive
+    CMP MAGRY
+.gm_not_near
+    RTS
+
+ENDIF
+.render
+    INC RENDERS: BNE render_counted
+    INC RENDERS+1
+.render_counted
+    LDA CAMX: STA EGBUF+8: LDA CAMY: STA EGBUF+9
+    LDA CAMYHI: STA EGBUF+10: LDA HP: STA EGBUF+11
+    LDA MAXHP: STA EGBUF+12
+    LDA XP: STA EGBUF+13
+    LDA #0: STA EGBUF+14: STA EGBUF+16
+IF ARENA=0
+    LDA CAMXF ; camera fine X (the arena's camera stays on bytes)
+ENDIF
+    STA EGBUF+18
+    JSR xp_threshold
+    STA EGBUF+15
+    LDA HP: BNE render_alive
+    LDA #1: BNE render_flags
+.render_alive
+    LDA #0
+.render_flags
+    ORA INVALID
+IF ARENA=0
+    ORA #32 ; the HUD clock
+ENDIF
+    STA EGBUF+17
+    AND #4: STA INVALID
+IF ARENA
+    LDA EGBUF+17: ORA #16: STA EGBUF+17 ; a bare world: black, no scenery
+    LDA #13: JSR eg_call
+    JSR a_frame ; the arena's red border
+ELSE
+    LDA #13: JSR eg_call
+ENDIF
+    LDA #0: STA PACKETCOUNT: STA PACKETPOS: STA DRAWPASS: STA EGBUF+9
+    ; Reverse-index ordering in three passes: kind3 enemies after the rest, so
+    ; the ROM stages each enemy sprite once per frame instead of per enemy,
+    ; then the screen-fixed batch (orbs, holy ward), which does not take the
+    ; camera's fine X. Batches carry16 actors each. The player (slot0) is
+    ; drawn after them from the companion ROM (draw_player).
+    LDX #40
+.draw_all
+    LDA KIND,X: BNE draw_kind
+    JMP draw_next
+.draw_kind
+IF ARENA=0 ; (an arena's few actors draw in one pass)
+    TAY: LDA KIND_FLAGS,Y: AND #8: BEQ draw_world_kind
+    JMP draw_next ; KIND_DRAW draws it
+.draw_world_kind
+    TYA: LDY #2
+    CMP #ORBKIND: BEQ draw_pass_known
+    CMP #WARDKIND: BEQ draw_pass_known
+    DEY
+    CMP #3: BEQ draw_pass_known
+    DEY
+.draw_pass_known
+    CPY DRAWPASS: BNE draw_next
+ENDIF
+    ; Torus visibility: objects persist off-screen; only draw the field.
+    ; Column77 keeps 16-pixel kinds (tentacles) inside the 80-byte row.
+    LDA OX,X: CMP #61: BCS draw_next
+    LDA OY,X: CMP #225: BCS draw_next
+    LDA OYH,X: BNE draw_next
+    STX IDX
+    LDY PACKETPOS
+    LDA KIND,X
+IF ARENA=0
+    ; The boss strobes: world kind1 frame0, its red frame1 on odd ticks (an
+    ; arena's guardian, kind_xlat, stays frame0: NARENA has no room).
+    CMP #9: BNE render_boss_done
+    LDA FRAME: LSR A: LDA #1: BCC render_store
+    LDA #32+1: BNE render_store
+.render_boss_done
+ENDIF
+IF ARENA=0
+    ; XP drops are the loot bag (kind5); coalesced big ones flash white.
+    CMP #5: BNE render_xlat
+    LDA #10: CMP LIFE,X: LDA #5: BCS render_store
+    LDA #128+5: BNE render_store
+ENDIF
+.render_xlat
+    ; A two-frame kind (KIND_FLAGS bit5) changes frame every other tick.
+    TAX: LDA FRAME: ASL A: ASL A: ASL A: ASL A: AND KIND_FLAGS,X
+    ORA KIND_XLAT,X: LDX IDX
+.render_store
+    STA EGBUF+16,Y
+    LDA OX,X: STA EGBUF+17,Y
+    LDA OY,X: STA EGBUF+18,Y
+    TYA: CLC: ADC #3: STA PACKETPOS
+    INC PACKETCOUNT: LDA PACKETCOUNT: CMP #16: BNE draw_restore
+    JSR flush_actors
+.draw_restore
+    LDX IDX
+.draw_next
+    DEX: BEQ draw_pass_end
+    JMP draw_all
+.draw_pass_end
+IF ARENA=0
+    LDA DRAWPASS: CMP #2: BEQ draw_passes_done
+    CMP #1: BNE draw_pass_next
+    JSR flush_actors
+    LDA #1: STA EGBUF+9 ; the last pass is screen-fixed
+.draw_pass_next
+    INC DRAWPASS: LDX #40: JMP draw_all
+ENDIF
+.draw_passes_done
+    JSR flush_actors
+IF ARENA=0
+    JSR ENEMY_DRAW: JSR KIND_DRAW
+ENDIF
+    JSR draw_player
+    JSR draw_swipe
+    ; Boss health bar (request prepared by the boss spawn) while it lives.
+IF ARENA
+    LDA LIFE+1: STA a_guard_bar+16 ; the guardian's own bar (slot1)
+    LDA #&C0: LDX #LO(a_guard_bar): LDY #HI(a_guard_bar): JSR &FFF1
+ELSE
+    LDX BOSSSLOT: BEQ no_boss_bar
+    ; A boss's bar, or (7:30) the horde's warning on the final shrine's slot.
+    LDA KIND,X: CMP #9: BEQ boss_bar_shown
+    CMP #SHRINE: BNE no_boss_bar
+.boss_bar_shown
+    LDA LIFE,X: STA BOSSBAR+16
+    LDA #&C0: LDX #LO(BOSSBAR): LDY #HI(BOSSBAR): JSR &FFF1
+.no_boss_bar
+ENDIF
+IF ARENA
+    JSR a_banner ; the victory message, on the last frame
+ELSE
+    ; The HUD clock (WORLD_BEGIN flags bit5): the run's tenths of a second.
+    LDA RUNTICKS: STA EGBUF+8: LDA RUNTICKSH: STA EGBUF+9
+ENDIF
+    LDA #15: JSR eg_call
+    ; Explicit host callback also works when the renderer claims service8 first.
+    ; Byte8 carries the kill count, so NFASSETS can sound each kill.
+    LDA KILLS: STA EGBUF+8
+    LDA #&C1: LDX #LO(EGBUF): LDY #HI(EGBUF): JMP &FFF1
+.flush_actors
+    LDA PACKETCOUNT: BEQ flush_done
+    STA EGBUF+8
+    LDA #14: JSR eg_call
+    LDA #0: STA PACKETCOUNT: STA PACKETPOS
+.flush_done
+    RTS
+ .draw_swipe
+    ; A newly triggered attack must not hide the clear frame after a flash.
+    LDA SWINGREST: BEQ swipe_ready
+    DEC SWINGREST: RTS
+.swipe_ready
+    LDA SWINGVIS: BNE swipe_visible
+    RTS
+.swipe_visible
+    ; One presentation per flash; combat ticks/damage are independent.
+    LDA #0: STA SWINGVIS
+    INC SWINGREST
+.swipe_pending
+    ; Pre-turned frame per direction, untransformed at a 4-pixel X: EGFX's
+    ; fast byte blitter, even in world mode.
+    LDX SWINGDIR
+IF ARENA
+    ; The player moves on screen: anchors follow its 120,112 offset.
+    LDA swipe_anchor_x,X: SEC: SBC #120: JSR a_screen_x: STA EGBUF+8: STY EGBUF+9
+    LDX SWINGDIR ; (a_screen_x used X)
+    LDA swipe_anchor_y,X: SEC: SBC #112: CLC: ADC OY: STA EGBUF+10
+ELSE
+    LDA swipe_anchor_x,X: STA EGBUF+8
+    LDA swipe_anchor_y,X: STA EGBUF+10
+ENDIF
+    TXA: JSR rom_sprite ; SPR_SWORD is 0: pre-turned per SWINGDIR (0..3)
+    ; Arc centred on facing: quarter turns64; card overlay sets ARCHALF.
+IF ARENA
+    LDA #6: JSR a_screen_x: STA EGBUF+8: STY EGBUF+9
+    LDA OY: CLC: ADC #8: STA EGBUF+10
+ELSE
+    LDA #126: STA EGBUF+8
+    LDA #120: STA EGBUF+10
+ENDIF
+    LDA SWORDR: STA EGBUF+12
+    LDA SWINGCOLOUR: STA EGBUF+13
+    LDA ARCHALF: STA COUNT
+    LDA SWINGDIR: ASL A: ASL A: ASL A: ASL A: ASL A: ASL A
+    SEC: SBC COUNT: STA EGBUF+15
+    CLC: ADC COUNT: CLC: ADC COUNT: STA EGBUF+16
+    ; Coarse segments (EGFX arc flags bits2..3 = 2: 16 angle units, under a
+    ; pixel off the curve at this radius); bit1 = a full turn at max coverage.
+    LDA #8: STA EGBUF+14
+    LDA SWORDARC: CMP #27: BNE swipe_arc
+    LDA #8+2: STA EGBUF+14
+.swipe_arc
+    LDA #25: JMP eg_call
+.draw_player
+    ; The knight, frame FACING*2+step: the step changes every other tick
+    ; while a move key is held.
+    LDX FACING
+IF ARENA
+    LDA knight_x,X: SEC: SBC #120: JSR a_screen_x: STA EGBUF+8: STY EGBUF+9
+    LDX FACING ; (a_screen_x used X)
+    LDA OY: STA EGBUF+10
+ELSE
+    LDA knight_x,X: STA EGBUF+8
+    LDA #112: STA EGBUF+10
+ENDIF
+    LDA KEYS: BEQ draw_player_step
+    LDA FRAME: LSR A: AND #1
+.draw_player_step
+    STA EGBUF+12
+    TXA: ASL A: ORA EGBUF+12: ADC #SPR_KNIGHT
+.rom_sprite ; frame A of the 16x16 pack at EGBUF+8..10 (X 16-bit, Y)
+    STA EGBUF+12
+    LDA #0: STA EGBUF+11: STA EGBUF+14
+IF ARENA=0
+    STA EGBUF+9 ; the screen-fixed X is a byte (arena callers set its high)
+ENDIF
+    LDA #SWORD_BANK: STA EGBUF+16
+    LDA #NFSPR16_PAGE: STA EGBUF+17
+    LDA #35: JMP eg_call
+.draw_player_done
+    RTS
+; The knight's 16 columns at a 4-pixel X, body where the old 12-wide
+; player's was (x120..131): right, front, left, back.
+.knight_x EQUB 120,116,116,116
+; Player box152..163 x112..127. Sword box sits just outside it in the facing
+; axis; X anchors are 4-pixel aligned for the byte blitter.
+.swipe_anchor_x EQUB 132,120,104,120
+.swipe_anchor_y EQUB 112,129,112,95
+; ---- Progression: meta state, menus, level-up choices, difficulty tiers ----
+IF ARENA=0
+ENDIF
+INCLUDE "src/xp-threshold.inc"
+; Compositor kind per object kind: power-ups and bosses glow white. Heal,
+; magnet and orb are kind4 frames0..2; XP drops (render_kind) the kind5 bag;
+; tentacles 11..14 are kind0 frames0..3.
+; Chest kinds15/16 select kind6 frames1/2; grave remains frame0.
+; KIND_XLAT and the TIER_ tables live in RAM, installed by the run reset.
+IF ARENA=0
+.check_level
+    JSR xp_threshold
+    CMP XP
+    BCC cl_enter
+    BEQ cl_enter
+    RTS
+.cl_enter
+    LDA #2: STA STATE
+    RTS
+.levelup_run
+    LDA #10: JSR &2F00
+    JMP (MAINVEC)
+.jt_upg
+    LDA #0: STA UICHOICE
+    LDA #6: JSR &2F00
+    LDA UICHOICE: CMP #2: BNE shop_return
+    JSR &2F00
+.shop_return
+    JMP (MAINVEC)
+.dead_frame
+    LDA #0: JSR &2F00 ; the summary waits for SPACE itself
+    JMP (MAINVEC)
+; STATE 0: main menu overlay polls SPACE.
+.menu_run
+    ; 1 starts a run; 14/15 open help/Players; the shop sets its own state.
+    LDA #7: JSR &2F00
+    LDA UICHOICE: CMP #1: BEQ menu_begin
+    CMP #14: BCC menu_stay
+    JSR &2F00
+.menu_stay
+    JMP (MAINVEC)
+.menu_begin
+    JSR reset: JMP resume_play
+; STATE 5: pause overlay polls P/R/M and answers through UICHOICE.
+.pause_run
+    ; Pause offers resume or quit; quitting banks the kept gold and saves
+    ; (NRESET entry3), which returns to the main menu.
+    LDA #8: JSR &2F00
+    LDA UICHOICE: CMP #3: BEQ pause_quit
+.resume_play
+    LDA #1: STA STATE: LDA #2: STA INVALID
+    JSR read_clock: LDA CLOCK: STA STAMP
+    JMP (MAINVEC)
+.pause_quit
+    LDA #3: JSR &2F00
+    JMP (MAINVEC)
+ELSE
+INCLUDE "src/arena-engine.inc"
+ENDIF
+INCLUDE "build/eg-client.6502"
+.end
+ASSERT end<=&2400
+IF ARENA
+SAVE "build/NARENA",start,end
+ELSE
+SAVE "build/NIGHT", start,end,start
+ENDIF

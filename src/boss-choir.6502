@@ -1,0 +1,102 @@
+; PCHOIR: the Hollow Choir, the final shrine's boss (a page NARENA loads to
+; KIND_HOOK; see arena-map.inc). It holds the arena's centre and sings
+; volleys of spokes (kind17, white points) out along eight of sixteen
+; headings, two neighbours left out as the gap, the volley turning each
+; time. A spoke flies 3 pixels a tick and costs half of BOSSDMG on a touch.
+; Volleys every 24, 16 and 10 ticks by phase; phase 3 also turns faster.
+CPU 0
+INCLUDE "src/nfvars.inc"
+INCLUDE "src/arena-map.inc"
+INCLUDE "build/arena-entry.inc"
+HP_MAX=120
+DIR=&2DC0
+CHOIR_X=28: CHOIR_Y=96 ; the boss's top-left: its middle is the arena's
+ORG KIND_HOOK
+.start
+    JMP choir_tick ; BOSS_TICK
+    RTS: NOP: NOP ; BOSS_DRAW: its spokes are world actors
+    EQUB HP_MAX,HP_MAX*2/3,HP_MAX/3 ; BOSS_HP: life, phases 2 and 3
+    EQUS "CHOIR",0,0,0,0 ; BOSS_NAME
+ASSERT P%=BOSS_NAME+9
+
+.choir_tick
+    LDA ARENA_WON: BEQ choir_singing
+    RTS
+.choir_singing
+    LDA choir_ready: BNE choir_held
+    INC choir_ready
+    LDA #8+3: STA KIND_XLAT+BOSS_OWNED+1 ; a spoke: a white point
+.choir_held
+    ; The boss holds the centre (the engine's chase is undone).
+    LDA #CHOIR_X: STA OX+1: LDA #CHOIR_Y: STA OY+1
+    DEC choir_cool: BNE choir_spokes
+    ; A volley: headings turn+2i, but for the two at the gap.
+    LDX ARENA_PHASE: LDA choir_cooldown,X: STA choir_cool
+    LDA choir_turn: CLC: ADC choir_step,X: STA choir_turn
+    INC choir_gap
+    LDA #7: STA choir_i
+.choir_volley
+    LDA choir_i: SEC: SBC choir_gap: AND #7: CMP #2: BCC choir_volley_next
+    JSR choir_free: BCS choir_spokes ; none free: the rest of it is lost
+    LDA #BOSS_OWNED+1: STA KIND,X: LDA #0: STA OYH,X: STA LIFE,X
+    LDA choir_i: ASL A: ADC choir_turn: AND #15: STA DIR,X
+    LDA #CHOIR_X+2: STA OX,X: LDA #CHOIR_Y+8: STA OY,X
+.choir_volley_next
+    DEC choir_i: BPL choir_volley
+.choir_spokes
+    ; Each spoke flies on; it goes at the border, or on a touch.
+    LDX #4
+.choir_spoke
+    LDA KIND,X: CMP #BOSS_OWNED+1: BNE choir_spoke_next
+    LDY DIR,X
+    ; X in 4-pixel units with its pixel left over in LIFE.
+    LDA LIFE,X: CLC: ADC choir_dx,Y: BPL choir_x_right
+    CLC: ADC #4: DEC OX,X: JMP choir_x_done
+.choir_x_right
+    CMP #4: BCC choir_x_done
+    SBC #4: INC OX,X
+.choir_x_done
+    STA LIFE,X
+    LDA OY,X: CLC: ADC choir_dy,Y: STA OY,X
+    CMP #TOP-8: BCC choir_spoke_gone
+    CMP #BOTTOM+16: BCS choir_spoke_gone
+    LDA OX,X: CMP #LEFT: BCC choir_spoke_gone
+    CMP #RIGHT+4: BCS choir_spoke_gone
+    ; A touch: within the knight's 16x16.
+    SEC: SBC OX: CMP #4: BCS choir_spoke_next
+    LDA OY,X: SEC: SBC OY: CMP #16: BCS choir_spoke_next
+    STX choir_i
+    LDA BOSSDMG: LSR A: ADC #0: JSR ARENA_HURT ; half, at least 1
+    LDX choir_i
+.choir_spoke_gone
+    LDA #0: STA KIND,X
+.choir_spoke_next
+    JSR choir_slot_next: BNE choir_spoke
+    RTS
+; The spokes' slots: 4..10, then 33..40. X = the next; Z set after 40.
+.choir_slot_next
+    INX: CPX #11: BNE choir_slot_more
+    LDX #33
+.choir_slot_more
+    CPX #41
+    RTS
+; A free spoke slot in X (carry clear), or carry set.
+.choir_free
+    LDX #4
+.choir_free_look
+    LDA KIND,X: BEQ choir_free_found
+    JSR choir_slot_next: BNE choir_free_look
+    SEC: RTS
+.choir_free_found
+    CLC: RTS
+
+.choir_ready EQUB 0: .choir_cool EQUB 30: .choir_turn EQUB 0
+.choir_gap EQUB 0: .choir_i EQUB 0
+.choir_cooldown EQUB 24,16,10 ; ticks between volleys, by phase
+.choir_step EQUB 1,1,3 ; the volley's turn, in sixteenths, by phase
+; Sixteen headings, 3 pixels a tick: X and Y pixels.
+.choir_dx EQUB 3,3,2,1,0,&FF,&FE,&FD,&FD,&FD,&FE,&FF,0,1,2,3
+.choir_dy EQUB 0,1,2,3,3,3,2,1,0,&FF,&FE,&FD,&FD,&FD,&FE,&FF
+.end
+ASSERT end<=KIND_HOOK_END
+SAVE "build/PCHOIR",start,end

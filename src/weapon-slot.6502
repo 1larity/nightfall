@@ -1,0 +1,151 @@
+; Position-specific NMOS weapon code. SLOT=0/1; ids1 Orb,2 Seeds,3 Storm,4 Ward.
+CPU 0
+INCLUDE "src/nfvars.inc"
+FRAME=&2E83
+ASSERT SLOT>=0 AND SLOT<=1
+ASSERT WEAPON_KIND>=ORB_ID AND WEAPON_KIND<=WEAPON_COUNT
+ASSERT SLOT_B_CODE-SLOT_A_CODE=120 AND &2B00-SLOT_B_CODE=120
+IF SLOT=0
+    ORG SLOT_A_CODE
+    FIRST=11: LAST=14: STATS=SLOT_A_STATS: LIMIT=SLOT_B_CODE
+ELSE
+    ORG SLOT_B_CODE
+    FIRST=15: LAST=18: STATS=SLOT_B_STATS: LIMIT=&2B00
+ENDIF
+.start
+IF WEAPON_KIND=ORB_ID
+    LDY STATS
+    INC ORBT: LDA ORBT: CMP #50: BCC orbs_set
+    LDY #0
+    CMP #80: BCC orbs_set
+    STY ORBT
+.orbs_set
+    STY WCNT
+    INC ORBANG: LDA ORBANG: STA WX
+    LDX #FIRST
+.orb_slot
+    LDA #0
+    DEC WCNT: BMI orb_store
+    LDA WX: AND #15: TAY
+    LDA ORBTX,Y: STA OX,X: LDA ORBTY,Y: STA OY,X
+    LDY STATS: LDA WX: CLC: ADC ORB_STEP,Y: STA WX
+    LDA #ORBKIND
+.orb_store
+    STA KIND,X
+    INX: CPX #LAST+1: BNE orb_slot
+    LDA FRAME: AND #3: BNE orb_done
+    LDX #LAST
+.orb_hit
+    LDA KIND,X: BEQ orb_next
+    LDA STATS+2: STA SWINGDMG
+    LDA #2: TAY: JSR WEAPON_HIT_HELPER
+.orb_next
+    DEX: CPX #FIRST-1: BNE orb_hit
+.orb_done
+    RTS
+ELIF WEAPON_KIND=SEED_ID
+    LDA STATS: CLC: ADC SEEDACC: STA SEEDACC
+    BCC objects
+    LDX #FIRST
+.find
+    LDA KIND,X: BEQ place
+    INX: CPX #LAST+1: BNE find
+    BEQ objects
+.place
+    ; A=0 from the empty KIND record. Publish nonzero KIND using the life
+    ; value; the object loop installs its actual animated kind this same tick.
+    STA OYH,X
+    LDA OX: STA OX,X: LDA OY: STA OY,X
+    LDA STATS+2: STA LIFE,X: STA KIND,X
+.objects
+    LDA FRAME: AND #3: STA WCNT
+    LDX #LAST
+.object
+    LDA KIND,X: BEQ next
+    DEC LIFE,X: BEQ expire
+    TXA: ASL A: ADC FRAME: LSR A: AND #3: CLC: ADC #TENTKIND: STA KIND,X
+    LDA WCNT: ORA OYH,X: BNE next
+    LDA STATS+1: STA SWINGDMG
+    LDA STATS+3: LDY #8: JSR WEAPON_HIT_HELPER
+.next
+    DEX: CPX #FIRST-1: BNE object
+    RTS
+.expire
+    LDA #0: STA KIND,X: BEQ next
+ELSE
+    ; One pulse object. Damage occurs only at cast, never on lingering art.
+    LDA KIND+FIRST: BEQ pulse_clock
+    DEC LIFE+FIRST: BNE pulse_follow
+    LDA #0: STA KIND+FIRST
+.pulse_follow
+IF WEAPON_KIND=WARD_ID
+    LDX #FIRST
+    LDA OX: STA OX,X: LDA OY: STA OY,X
+    LDA #0: STA OYH,X
+ENDIF
+.pulse_clock
+IF WEAPON_KIND=STORM_ID
+    ACC=STORMACC
+ELSE
+    ACC=WARDACC
+ENDIF
+    LDA STATS: CLC: ADC ACC: STA ACC: BCC pulse_done
+IF WEAPON_KIND=STORM_ID
+    ; Cycle the ten enemy records; ignore fixed-world actors/off-screen rows.
+    LDY #10: LDX STORMNEXT
+.storm_scan
+    INX: CPX #11: BCC storm_test
+    LDX #1
+.storm_test
+    LDA KIND,X: BEQ storm_next
+    CMP #SHRINE: BCS storm_next
+    LDA OYH,X: BNE storm_next
+    LDA OY,X: CMP #225: BCS storm_next
+    LDA OX,X: CMP #61: BCC storm_found
+.storm_next
+    DEY: BNE storm_scan
+    RTS
+.storm_found
+    STX STORMNEXT
+    LDA OX,X: STA OX+FIRST: LDA OY,X: STA OY+FIRST
+    LDA #STORMKIND
+ELSE
+    LDA OX: STA OX+FIRST: LDA OY: STA OY+FIRST
+    LDA #WARDKIND
+ENDIF
+    LDX #FIRST: STA KIND,X
+    LDA #0: STA OYH,X
+    LDA STATS+3: STA LIFE,X
+    LDA STATS+1: STA SWINGDMG
+    LDA STATS+2: LDY #8: JSR WEAPON_HIT_HELPER
+.pulse_done
+    RTS
+ENDIF
+.end
+ASSERT end<=LIMIT
+
+IF WEAPON_KIND=ORB_ID
+ IF SLOT=0
+  SAVE "build/ORBA",start,end
+ ELSE
+  SAVE "build/ORBB",start,end
+ ENDIF
+ELIF WEAPON_KIND=SEED_ID
+ IF SLOT=0
+  SAVE "build/SEEDA",start,end
+ ELSE
+  SAVE "build/SEEDB",start,end
+ ENDIF
+ELIF WEAPON_KIND=STORM_ID
+ IF SLOT=0
+  SAVE "build/STORMA",start,end
+ ELSE
+  SAVE "build/STORMB",start,end
+ ENDIF
+ELSE
+ IF SLOT=0
+  SAVE "build/WARDA",start,end
+ ELSE
+  SAVE "build/WARDB",start,end
+ ENDIF
+ENDIF

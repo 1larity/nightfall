@@ -1,0 +1,30 @@
+CPU 0
+INCLUDE "src/nfvars.inc"
+INCLUDE "build/night-entry.inc" ; NIGHT_RANDOM, for the enemy core
+INCLUDE "build/sprite-map.inc" ; SPR_SHRINE, for the enemy core
+DIR=&2DC0: FRAME=&2E83: IFRAME=&2E85: DEMO=&2E86: DEAD=&2EAA
+BOSSLO=&2E97: BOSSHI=&2E98: BOSSN=&2E99
+CAMX=&2E90: CAMY=&2E91: CAMYHI=&2E92
+OSWORD=&FFF1
+PLAYERS=0
+ORG &1900
+.start
+EQUS "EGOV": EQUB 2,16: EQUW end-start
+RTS: NOP: NOP ; entry0 is the death summary in NIGHTUI
+JMP load_meta
+JMP save_meta
+JMP bank_and_save
+SKIP 21
+JMP reset_run
+SKIP 9
+RTS: NOP: NOP ; entry15 Players screen is NPLAYER
+INCLUDE "src/meta.inc"
+INCLUDE "src/profiles.inc"
+INCLUDE "src/menu-audio.inc"
+INCLUDE "src/hint-text.inc"
+MENU_GFX=p_gfx
+INCLUDE "src/menu-frame.inc"
+INCLUDE "src/run-reset.inc"
+.end
+ASSERT end<=&2400
+SAVE "build/NRESET",start,end

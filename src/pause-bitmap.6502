@@ -1,0 +1,69 @@
+; Host-only MODE 1 bitmap renderer. BEGIN already selected the drawing page.
+; &70/71 source; &72/73 destination; &74 row; &75 column; &76 byte.
+; No new persistent workspace, no MOS calls, no bank switching.
+.nf_pause_bitmap
+    PHP
+    LDX #7
+.nfp_save
+    LDA &70,X: PHA: DEX: BPL nfp_save
+    LDA #0: STA &74
+.nfp_row
+    LDX &74
+    LDA pause_source_lo,X: STA &70
+    LDA pause_source_hi,X: STA &71
+    LDA pause_dest_lo,X: STA &72
+    LDA pause_dest_hi,X: STA &73
+    LDA #0: STA &75
+.nfp_column
+    LDY &75: LDA (&70),Y: STA &76
+    LDY #0: STA (&72),Y
+    ; Destination at mirrored column: left+8*(79-2*column).
+    LDA &72: PHA: LDA &73: PHA
+    LDA #79: SEC: SBC &75: SEC: SBC &75
+    STA &77: LDA #0
+    ASL &77: ROL A: ASL &77: ROL A: ASL &77: ROL A
+    TAX: LDA &72: CLC: ADC &77: STA &72
+    TXA: ADC &73: STA &73
+    LDX &76: LDA pause_reverse,X: STA (&72),Y
+    PLA: STA &73: PLA: STA &72
+    CLC: LDA &72: ADC #8: STA &72
+    BCC nfp_next
+    INC &73
+.nfp_next
+    INC &75: LDA &75: CMP #40: BNE nfp_column
+    INC &74: BNE nfp_row
+    LDX #0
+.nfp_restore
+    PLA: STA &70,X: INX: CPX #8: BNE nfp_restore
+    PLP: RTS
+; 96x16 doubled-font title at112,72; opaque white/red matches banner fill.
+.nf_pause_title
+    PHP
+    LDX #7
+.nft_save
+    LDA &70,X: PHA: DEX: BPL nft_save
+    LDA #LO(pause_title_pixels): STA &70
+    LDA #HI(pause_title_pixels): STA &71
+    LDA #72: STA &74
+.nft_row
+    LDX &74
+    LDA pause_dest_lo,X: CLC: ADC #224: STA &72
+    LDA pause_dest_hi,X: ADC #0: STA &73
+    LDA #0: STA &75
+.nft_col
+    LDY &75: LDA (&70),Y
+    LDY #0: STA (&72),Y
+    CLC: LDA &72: ADC #8: STA &72
+    BCC nft_inc
+    INC &73
+.nft_inc
+    INC &75: LDA &75: CMP #24: BNE nft_col
+    CLC: LDA &70: ADC #24: STA &70
+    BCC nft_next
+    INC &71
+.nft_next
+    INC &74: LDA &74: CMP #88: BNE nft_row
+    LDX #0
+.nft_restore
+    PLA: STA &70,X: INX: CPX #8: BNE nft_restore
+    PLP: RTS

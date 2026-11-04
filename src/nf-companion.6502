@@ -1,0 +1,188 @@
+; Read-only sprite/tune ROM; explicit &C1 frame callback runs on MOS host.
+CPU 0
+ORG &8000
+EQUB 0,0,0
+JMP nf_service
+EQUB &82, copyright-&8000, 6
+EQUS "NF-ASSETS",0,"1.1",0
+.copyright EQUB 0: EQUS "(C)2026 Nightfall",0
+INCLUDE "build/sword-bank.inc"
+ORG &8080
+.nf_service
+    CMP #1: BNE nf_word
+    PHA: LDA #0: STA NF_ACTIVE: PLA: RTS
+.nf_word
+    CMP #8: BNE nf_not_word
+    JMP nf_dispatch
+.nf_not_word
+    RTS
+; Every sprite, once: one EGSP v3 pack per frame size (tools/assets.py).
+; EGFX35/37 draw from them; the world stages its kinds from them (EGFX44).
+INCLUDE "build/sprite-map.inc"
+ORG NFSPR16_PAGE*256
+INCBIN "build/NFSPR16"
+ASSERT P%<=NFSPR4_PAGE*256
+ORG NFSPR4_PAGE*256
+INCBIN "build/NFSPR4"
+ASSERT P%<=NFSPR8_PAGE*256
+ORG NFSPR8_PAGE*256
+INCBIN "build/NFSPR8"
+ASSERT P%<=SPRITES_END
+ASSERT P%<=MENU_SCORE
+INCLUDE "src/nfassets-map.inc"
+ORG MENU_SCORE
+.menu_score INCBIN "build/JUPITER"
+ASSERT P%<=CARD_SCORE
+ORG CARD_SCORE
+.card_score INCBIN "build/URANUS"
+ASSERT P%<=&9800
+ORG &9800
+NF_ACTIVE=&2BC0: NF_HP=&2BC1: NF_XP=&2BC2: NF_THRESHOLD=&2BC3
+NF_KILLS=&2BC4: NF_NEWKILLS=&2BC5 ; kill count heard / just reported (block byte8)
+NFCLOCK=&2BD0: NFSTAMP=&2BD5
+NFBLOCK=&2B80
+; Host world metadata is populated from the ordinary Tube-safe render request.
+GHP=&286B: GMAXHP=&286C: GXP=&286D: GTHRESH=&286F: GFLAGS=&2871
+.nf_dispatch
+    PHA: TXA: PHA: TYA: PHA
+    LDA &EF: CMP #&C1: BNE nf_pass
+    LDY #5
+    LDA (&F0),Y: CMP #16: BEQ nf_pause_request
+    CMP #17: BEQ nf_pause_request
+    CMP #15: BNE nf_pass
+    DEY
+.nf_signature_check
+    LDA (&F0),Y: CMP nf_signature,Y: BNE nf_pass
+    DEY: BPL nf_signature_check
+    LDA &F0: PHA: LDA &F1: PHA: LDA &EF: PHA
+    JSR nf_events
+    PLA: STA &EF: PLA: STA &F1: PLA: STA &F0
+    PLA: TAY: PLA: TAX: PLA: LDA #0: RTS
+    ; Pause art has its own caller signature; no recursive MOS graphics calls.
+.nf_pause_request
+    LDY #4
+.nf_pause_signature
+    LDA (&F0),Y: CMP nf_signature,Y: BNE nf_pass
+    DEY: BPL nf_pause_signature
+    LDY #5: LDA (&F0),Y: CMP #17: BEQ nf_title_request
+    JSR nf_pause_bitmap
+    JMP nf_pause_ack
+.nf_title_request
+    JSR nf_pause_title
+.nf_pause_ack
+    LDY #6: LDA #0: STA (&F0),Y
+    INY: LDA #&A5: STA (&F0),Y
+    PLA: TAY: PLA: TAX: PLA: LDA #0: RTS
+.nf_pass
+    PLA: TAY: PLA: TAX: PLA: RTS
+.nf_signature EQUB 64,8: EQUS "EG": EQUB 1,15
+.nf_events
+    ; The client puts its kill count in byte8; read it before the clock call
+    ; repoints &F0 at another block.
+    LDY #8: LDA (&F0),Y: STA NF_NEWKILLS
+    LDA #1: LDX #LO(NFCLOCK): LDY #HI(NFCLOCK): JSR &FFF1
+    LDA GFLAGS: AND #1: BEQ nf_alive
+    LDA NF_ACTIVE: BNE nf_stop
+    RTS
+.nf_stop
+    LDA #0: STA NF_ACTIVE
+    LDX #0: JMP nf_play_sfx
+.nf_alive
+    ; No in-game music: the first live frame only initialises EAUDIO (and its
+    ; effect envelopes).
+    LDA NF_ACTIVE: BNE nf_changes
+    LDA #0: JSR nf_audio_command
+    LDA #1: STA NF_ACTIVE
+    LDA NF_NEWKILLS: STA NF_KILLS
+    JMP nf_remember
+.nf_changes
+    LDA NF_NEWKILLS: CMP NF_KILLS: BEQ nf_hurt
+    STA NF_KILLS
+    LDX #6: JSR nf_play_sfx ; kill crunch
+.nf_hurt
+    LDA GHP: CMP NF_HP: BCS nf_xp
+    LDX #2: JSR nf_play_sfx
+.nf_xp
+    LDA GXP: CMP NF_XP: BCC nf_promoted
+    BEQ nf_level
+    LDX #4: JSR nf_play_sfx ; XP bell
+    JMP nf_level
+.nf_promoted
+    LDX #3: JSR nf_play_sfx
+    JMP nf_heart
+.nf_level
+    LDA GTHRESH: CMP NF_THRESHOLD: BEQ nf_heart
+    LDX #3: JSR nf_play_sfx
+.nf_heart
+    ; Below a quarter of maximum HP, a heartbeat once a second.
+    LDA GHP: BEQ nf_heart_ready
+    ASL A: BCS nf_heart_ready: ASL A: BCS nf_heart_ready
+    CMP GMAXHP: BCS nf_heart_ready
+    LDA NFCLOCK: SEC: SBC NFSTAMP: CMP #100: BCC nf_remember
+    LDA NFCLOCK: STA NFSTAMP
+    LDX #12: JSR nf_play_sfx
+    JMP nf_remember
+.nf_heart_ready
+    ; Healthy (or dead): beat as soon as HP next falls low.
+    LDA NFCLOCK: SEC: SBC #100: STA NFSTAMP
+.nf_remember
+    LDA GHP: STA NF_HP: LDA GXP: STA NF_XP
+    LDA GTHRESH: STA NF_THRESHOLD
+.nf_done
+    RTS
+.nf_play_sfx
+    TXA: STA NFBLOCK+8
+    LDA #3
+.nf_audio_command
+    STA NFBLOCK+6
+    LDA #64: STA NFBLOCK
+    LDA #16: STA NFBLOCK+1
+    LDA #'E': STA NFBLOCK+2
+    LDA #'A': STA NFBLOCK+3
+    LDA #'U': STA NFBLOCK+4
+    LDA #'D': STA NFBLOCK+5
+    LDA #&C0: LDX #LO(NFBLOCK): LDY #HI(NFBLOCK): JMP &FFF1
+INCLUDE "src/pause-bitmap.6502"
+.nf_service_end
+ASSERT P%<=&A400
+ORG &A400
+.pause_frame_bitmap
+; Opaque 160x128 MODE 1 pixels: 40 bytes/row, row-major.
+INCBIN "build/PAUSEFRAME"
+.pause_frame_bitmap_end
+ASSERT pause_frame_bitmap_end-pause_frame_bitmap=5120
+ASSERT P%=&B800
+; Mirrored pixels reverse four positions in each colour plane, not eight bits.
+.pause_reverse
+FOR b,0,255
+EQUB ((b AND &88) DIV 8) OR ((b AND &44) DIV 2) OR ((b AND &22)*2) OR ((b AND &11)*8)
+NEXT
+.pause_source_lo
+FOR y,0,255
+IF y<128
+EQUB LO(&A400+y*40)
+ELSE
+EQUB LO(&A400+(255-y)*40)
+ENDIF
+NEXT
+.pause_source_hi
+FOR y,0,255
+IF y<128
+EQUB HI(&A400+y*40)
+ELSE
+EQUB HI(&A400+(255-y)*40)
+ENDIF
+NEXT
+.pause_dest_lo
+FOR y,0,255
+EQUB LO(&3000+(y DIV 8)*640+(y AND 7))
+NEXT
+.pause_dest_hi
+FOR y,0,255
+EQUB HI(&3000+(y DIV 8)*640+(y AND 7))
+NEXT
+ORG &BD00
+.pause_title_pixels INCBIN "build/PAUSETITLE"
+ASSERT P%=&BE80
+ASSERT P%<=&C000
+SAVE "build/NFASSETS.rom",&8000,&C000

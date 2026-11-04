@@ -1,0 +1,24 @@
+CPU 0
+INCLUDE "src/nfvars.inc"
+DIR=&2DC0: FRAME=&2E83: IFRAME=&2E85: DEMO=&2E86: DEAD=&2EAA
+BOSSLO=&2E97: BOSSHI=&2E98: BOSSN=&2E99
+CAMX=&2E90: CAMY=&2E91: CAMYHI=&2E92
+OSWORD=&FFF1
+PLAYERS=1
+ORG &1900
+.start
+EQUS "EGOV": EQUB 2,16: EQUW end-start
+; Only entry15 is routed here; the unused entry slots hold strings.
+.p_title EQUS "PLAYER PROFILES",0
+.p_empty EQUS "NO PROFILE - ",KEY,"N",KEY,"EW",0
+SKIP &1908+15*3-P%
+JMP profiles_screen
+INCLUDE "src/meta.inc"
+INCLUDE "src/profiles.inc"
+INCLUDE "src/menu-audio.inc"
+INCLUDE "src/hint-text.inc"
+MENU_GFX=p_gfx
+INCLUDE "src/menu-frame.inc"
+.end
+ASSERT end<=&2400
+SAVE "build/NPLAYER",start,end

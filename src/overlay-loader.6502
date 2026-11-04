@@ -1,0 +1,53 @@
+; Processor-neutral disk overlays. Always resident, outside the swapped window.
+; A=entry index0..15. All registers/flags clobbered; ordinary JSR/RTS stack.
+; UI must return here, not jump into the currently evicted NIGHT engine.
+; Trusts its callers and the disc: no index, nesting, size or header checks.
+CPU 0
+INCLUDE "build/overlay-sizes.inc"
+BLOCK=&2C90
+ORG &2F00
+.overlay_call
+    JMP overlay_dispatch
+; Stable resident main-loop checkpoint; never aliases evicted UI instructions.
+.overlay_checkpoint
+    RTS
+.overlay_dispatch
+    TAX: ASL A: STX overlay_entry+1
+    CLC: ADC overlay_entry+1: CLC: ADC #8: STA overlay_entry+1
+    LDA overlay_select,X: TAX
+    JSR overlay_load
+.overlay_entry
+    JSR &1908
+    LDX #1
+.overlay_load
+    STX overlay_file
+    LDA #0: LDX #17
+.overlay_clear
+    STA BLOCK,X: DEX: BPL overlay_clear
+    LDX overlay_file
+    LDA overlay_names_lo,X: STA BLOCK
+    LDA #HI(overlay_ui): STA BLOCK+1 ; every name is in this page
+    LDA #&19: STA BLOCK+3 ; load at &1900 (exec-low 0: this address)
+    LDA #&FF: LDX #LO(BLOCK): LDY #HI(BLOCK): JMP &FFDD
+; 4 world map and 13 boss spawn are in the paged overlay NFCOMB; 11 the
+; run reset is NRESET's; 10 is level-up (NCARDS resolves, engine applies); 12 a shrine's
+; arena (NARENA); 15 Players is NPLAYER.
+.overlay_select EQUB 0,2,2,2,4,0,0,0,0,0,3,2,6,4,4,5
+.overlay_ui EQUS "NIGHTUI",13
+.overlay_cards EQUS "NCARDS",13
+.overlay_reset EQUS "NRESET",13
+.overlay_engine EQUS "NIGHT",13
+.overlay_combat_file EQUS "NFCOMB",13
+.overlay_players EQUS "NPLAYER",13
+.overlay_arena EQUS "NARENA",13
+.overlay_file EQUB 0
+.overlay_names_lo EQUB LO(overlay_ui),LO(overlay_engine),LO(overlay_reset),LO(overlay_cards),LO(overlay_combat_file),LO(overlay_players),LO(overlay_arena)
+.overlay_end
+ASSERT overlay_end<=&2FB0 ; NFBOOT's NIGHT loader runs from &2FB0
+ASSERT HI(overlay_ui)=HI(overlay_players) AND HI(overlay_ui)=HI(overlay_arena)
+ASSERT ARENA_SIZE<=&B00
+ASSERT PLAYER_SIZE<=&B00
+ASSERT UI_SIZE>=21
+ASSERT UI_SIZE<=&B00
+ASSERT ENGINE_SIZE<=&B00
+SAVE "build/NFLOAD",overlay_call,overlay_end
