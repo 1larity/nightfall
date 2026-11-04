@@ -8,7 +8,7 @@ The game project made considerable use of AI coding agents, all graphics are by 
 
 ## Play in your browser
 
-[Play Nightfall in jsbeeb](https://bbc.xania.org/?model=Master&rom.3=github:1larity/nightfall/EGFX2.rom&rom.4=github:1larity/nightfall/EGFX.rom&rom.5=github:1larity/nightfall/EAUDIO.rom&rom.7=github:1larity/nightfall/NFASSETS.rom&disc1=github:1larity/nightfall/nightfall.ssd&autotype=*DISC%0A*RUN%20NFBOOT%0A). It takes about 30 seconds to reach the menu. Your players last until you reload the page, so use an emulator or your own machine to keep your progress.
+[Play Nightfall in jsbeeb](https://bbc.xania.org/?model=Master&rom.3=github:1larity/nightfall/EGFX2.rom&rom.4=github:1larity/nightfall/EGFX.rom&rom.5=github:1larity/nightfall/EAUDIO.rom&rom.7=github:1larity/nightfall/NFASSETS.rom&disc1=github:1larity/nightfall/nightfall.ssd&autotype=*DISC%0A*RUN%20NFBOOT%0A). Zero setup. Your players last until you reload the page, so use an emulator or your own machine to keep your progress.
 
 ## Run it yourself
 
