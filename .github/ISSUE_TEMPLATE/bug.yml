@@ -1,0 +1,29 @@
+name: Bug report
+description: Something went wrong in Nightfall
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The line at the bottom of the main menu, e.g. BETA 1 85D445C
+    validations:
+      required: true
+  - type: input
+    id: machine
+    attributes:
+      label: Machine
+      description: Emulator and version, or real hardware (model, Tube, sideways RAM board, filing system)
+    validations:
+      required: true
+  - type: input
+    id: roms
+    attributes:
+      label: ROM slots
+      description: Which file is in which slot, e.g. EGFX 4, EGFX2 3, EAUDIO 5, NFASSETS 7
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw and what you expected. Screenshots and the disc image help.
+    validations:
+      required: true
